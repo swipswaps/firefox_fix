@@ -28,6 +28,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# ANSI Strip Pattern
+ANSI_STRIP="s/\x1b\[[0-9;]*m//g"
+
 # -----------------------------
 # FUNCTIONS
 # -----------------------------
@@ -40,6 +43,11 @@ assert() {
         echo -e "${RED}ASSERTION FAILED: $msg${NC}"
         exit 1
     fi
+}
+
+# Check if sudo is available and functional
+has_sudo() {
+    command -v sudo &> /dev/null && sudo -n true &> /dev/null
 }
 
 # Dependency management: Check and install missing tools
@@ -58,25 +66,27 @@ check_dependencies() {
 
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo -e "${YELLOW}Missing dependencies: ${missing[*]}${NC}"
-        echo -e "${BLUE}Attempting to install missing tools...${NC}"
         
-        if command -v apt-get &> /dev/null; then
-            sudo apt-get update -qq
-            for tool in "${missing[@]}"; do
-                case "$tool" in
-                    "ps") sudo apt-get install -y -qq procps ;;
-                    "renice") sudo apt-get install -y -qq bsdutils ;;
-                    "ionice") sudo apt-get install -y -qq util-linux ;;
-                    "free"|"uptime") sudo apt-get install -y -qq procps ;;
-                    *) sudo apt-get install -y -qq "$tool" ;;
-                esac
-            done
-        elif command -v yum &> /dev/null; then
-            for tool in "${missing[@]}"; do
-                sudo yum install -y -q "$tool"
-            done
+        if has_sudo; then
+            echo -e "${BLUE}Attempting to install missing tools via sudo...${NC}"
+            if command -v apt-get &> /dev/null; then
+                sudo apt-get update -qq
+                for tool in "${missing[@]}"; do
+                    case "$tool" in
+                        "ps") sudo apt-get install -y -qq procps ;;
+                        "renice") sudo apt-get install -y -qq bsdutils ;;
+                        "ionice") sudo apt-get install -y -qq util-linux ;;
+                        "free"|"uptime") sudo apt-get install -y -qq procps ;;
+                        *) sudo apt-get install -y -qq "$tool" ;;
+                    esac
+                done
+            elif command -v yum &> /dev/null; then
+                for tool in "${missing[@]}"; do
+                    sudo yum install -y -q "$tool"
+                done
+            fi
         else
-            echo -e "${RED}ERROR: Package manager not found. Please install manually: ${missing[*]}${NC}"
+            echo -e "${RED}ERROR: Missing tools and sudo not available. Please install manually: ${missing[*]}${NC}"
             exit 1
         fi
         
@@ -99,7 +109,7 @@ log_msg() {
     [[ -z "$msg" ]] && return
 
     # Use tee for transparency
-    echo -e "${color}$(date '+%F %T') | $msg${NC}" | sed 's/\x1b\[[0-9;]*m//g' >> "$OUTPUT_FILE"
+    echo -e "${color}$(date '+%F %T') | $msg${NC}" | sed "$ANSI_STRIP" >> "$OUTPUT_FILE"
     
     # TEST: Verify log file exists after writing
     assert "[[ -f '$OUTPUT_FILE' ]]" "Log file $OUTPUT_FILE was not created/updated"
@@ -148,7 +158,11 @@ process_cycle() {
     fi
 
     if [[ -n "$ps_output" ]]; then
-        echo "$ps_output" | awk -v dry="$DRY_RUN" -v min_cpu="$MIN_CPU" -v opt_cpu="$OPTIMIZE_THRESHOLD" -v renice_v="$RENICE_VAL" -v ionice_c="$IONICE_CLASS" -v ionice_p="$IONICE_PRIO" -v red="$RED" -v green="$GREEN" -v yellow="$YELLOW" -v nc="$NC" '
+        # Determine if we should use sudo for optimizations
+        local use_sudo="false"
+        has_sudo && use_sudo="true"
+
+        echo "$ps_output" | awk -v dry="$DRY_RUN" -v sudo_v="$use_sudo" -v min_cpu="$MIN_CPU" -v opt_cpu="$OPTIMIZE_THRESHOLD" -v renice_v="$RENICE_VAL" -v ionice_c="$IONICE_CLASS" -v ionice_p="$IONICE_PRIO" -v red="$RED" -v green="$GREEN" -v yellow="$YELLOW" -v nc="$NC" '
         {
             pid = $1
             tid = $2
@@ -167,8 +181,9 @@ process_cycle() {
                         status = "DRY-RUN (Skip Opt)"
                         color = yellow
                     } else {
-                        cmd1 = "renice -n " renice_v " -p " tid " >/dev/null 2>&1"
-                        cmd2 = "ionice -c " ionice_c " -n " ionice_p " -p " tid " >/dev/null 2>&1"
+                        prefix = (sudo_v == "true") ? "sudo " : ""
+                        cmd1 = prefix "renice -n " renice_v " -p " tid " >/dev/null 2>&1"
+                        cmd2 = prefix "ionice -c " ionice_c " -n " ionice_p " -p " tid " >/dev/null 2>&1"
                         
                         res1 = system(cmd1)
                         res2 = system(cmd2)
@@ -190,7 +205,7 @@ process_cycle() {
             if [[ "$line" == "OPTIMIZE_EVENT" ]]; then
                 ((opt_count++))
             else
-                echo -e "$line" | tee -a >(sed 's/\x1b\[[0-9;]*m//g' >> "$OUTPUT_FILE")
+                echo -e "$line" | tee -a >(sed "$ANSI_STRIP" >> "$OUTPUT_FILE")
             fi
         done
     else
