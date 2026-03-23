@@ -21,6 +21,7 @@ set -euo pipefail
 # -----------------------------
 # Use absolute paths where possible or ensure relative paths are safe
 OUTPUT_FILE="./active_threads.log"
+MAX_LOG_SIZE_KB=1024            # Rotate log after 1MB
 MIN_CPU=0.1                     # Threshold for "active" (0.1% CPU)
 RENICE_VAL=5                    # Lower priority (higher nice value)
 IONICE_CLASS=2                  # Best-effort
@@ -30,6 +31,7 @@ TIMESTAMP_PREFIX="Timestamp:"
 OPTIMIZE_THRESHOLD=5.0          # CPU % to trigger renice/ionice
 DRY_RUN=${DRY_RUN:-false}       # Set to true to skip actual renice/ionice
 SELF_TEST_MODE=false            # Internal flag for self-test
+SUDO_REFRESH_PID=""             # Global to track the refresher
 
 # Terminal Colors (using printf-compatible escapes)
 RED='\033[0;31m'
@@ -93,7 +95,7 @@ init_sudo() {
         ) &
         SUDO_REFRESH_PID=$!
         # Ensure the refresher is killed on exit
-        trap 'kill "$SUDO_REFRESH_PID" 2>/dev/null || true; cleanup' EXIT SIGINT SIGTERM
+        trap 'cleanup' EXIT SIGINT SIGTERM
         printf "${GREEN}Sudo privileges acquired and kept alive (PID: %d).${NC}\n" "$SUDO_REFRESH_PID"
     else
         printf "${YELLOW}WARNING: Sudo privileges not acquired. Optimizations may fail with 'Perm Denied'.${NC}\n"
@@ -163,6 +165,16 @@ log_msg() {
     
     [[ -z "$msg" ]] && return
 
+    # Log rotation check
+    if [[ -f "$OUTPUT_FILE" ]]; then
+        local size_kb
+        size_kb=$(du -k "$OUTPUT_FILE" | cut -f1)
+        if (( size_kb > MAX_LOG_SIZE_KB )); then
+            mv "$OUTPUT_FILE" "${OUTPUT_FILE}.old"
+            printf "%s | Log rotated due to size limit (%d KB).\n" "$(date '+%F %T')" "$size_kb" > "$OUTPUT_FILE"
+        fi
+    fi
+
     # Print to terminal with color
     printf "${color}%s | %s${NC}\n" "$(date '+%F %T')" "$msg"
     # Append to log file without color
@@ -173,6 +185,11 @@ log_msg() {
 
 cleanup() {
     # Best Practice: Avoid recursive calls or infinite loops in cleanup
+    # Kill the sudo refresher if it exists
+    if [[ -n "$SUDO_REFRESH_PID" ]]; then
+        kill "$SUDO_REFRESH_PID" 2>/dev/null || true
+    fi
+
     printf "\n${BLUE}Shutting down Firefox Process Optimizer...${NC}\n"
     # We don't call log_msg here to avoid potential issues if log_msg fails
     printf "%s | Optimizer stopped by user.\n" "$(date '+%F %T')" >> "$OUTPUT_FILE"
@@ -204,8 +221,12 @@ process_cycle() {
     
     # Capture thread data
     # Best Practice: Use native awk filtering to reduce pipes and overhead
+    # Harden: Ensure ps output is valid and handle potential empty/malformed lines
     local ps_output
-    ps_output=$(ps -eL -o pid,tid,pcpu,rss,args --no-headers | awk '/-contentproc/ { print $0 }')
+    if ! ps_output=$(ps -eL -o pid,tid,pcpu,rss,args --no-headers 2>/dev/null | awk '/-contentproc/ { print $0 }'); then
+        log_msg "CRITICAL: Failed to execute ps command. Check system permissions." "$RED"
+        return
+    fi
 
     # Simulation for self-test
     if [[ "$SELF_TEST_MODE" == "true" && -z "$ps_output" ]]; then
@@ -220,8 +241,14 @@ process_cycle() {
         # Best Practice: Pass variables to awk using -v to avoid shell injection/quoting issues
         # Use a while loop to handle optimization commands shell-side for better control
         while read -r pid tid cpu rss args; do
+            # Harden: Validate that we actually got numeric values for pid/tid/cpu
+            if [[ ! "$pid" =~ ^[0-9]+$ || ! "$tid" =~ ^[0-9]+$ ]]; then
+                continue
+            fi
+
             local cpu_val mem_mb status color
-            cpu_val=$(printf "%.0f" "$cpu") # Round to integer for comparison
+            # Use printf to round CPU to integer safely
+            cpu_val=$(printf "%.0f" "$cpu" 2>/dev/null || echo 0)
             mem_mb=$(( rss / 1024 ))
             status="Active"
             color="$GREEN"
@@ -236,13 +263,19 @@ process_cycle() {
                         [[ "$use_sudo" == "true" ]] && prefix="sudo "
                         
                         # Best Practice: Execute and check return codes explicitly
-                        if $prefix renice -n "$RENICE_VAL" -p "$tid" >/dev/null 2>&1 && \
-                           $prefix ionice -c "$IONICE_CLASS" -n "$IONICE_PRIO" -p "$tid" >/dev/null 2>&1; then
+                        local err_msg
+                        # Harden: Use a subshell to capture stderr and stdout separately if needed, 
+                        # but here we just want the first error line for the log.
+                        if err_msg=$( { $prefix renice -n "$RENICE_VAL" -p "$tid" && \
+                                       $prefix ionice -c "$IONICE_CLASS" -n "$IONICE_PRIO" -p "$tid"; } 2>&1 ); then
                             status="OPTIMIZED"
                             color="$RED"
                             ((opt_count++))
                         else
-                            status="HIGH (Perm Denied)"
+                            # Strip common noise from error messages
+                            local clean_err
+                            clean_err=$(echo "$err_msg" | head -n1 | sed 's/renice: //; s/ionice: //')
+                            status="HIGH (Err: ${clean_err})"
                             color="$YELLOW"
                         fi
                     fi
