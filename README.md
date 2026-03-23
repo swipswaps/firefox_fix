@@ -8,32 +8,43 @@ This project emerged from a series of failed attempts to create a reliable, non-
 4. **Passive Monitoring:** Scripts would report data but fail to actually apply optimizations like `renice` or `ionice`.
 
 ## Where We Are
-We now have a robust, PRF-compliant Bash utility (`firefox_content_opt_v3.sh`) that:
+We now have a robust, PRF-compliant Bash utility (`firefox_content_opt.sh`) that:
 - **Captures Live Data:** Actively queries the system for Firefox threads using `ps -eL`.
 - **Filters Noise:** Automatically ignores idle threads (0% CPU) to focus on performance hotspots.
-- **Provides Evidence:** Displays real-time troubleshooting data (PID, TID, CPU%, MEM) to the terminal with **color-coded status** (Green for active, Red for optimized, Yellow for permission issues).
+- **Provides Evidence:** Displays real-time troubleshooting data (PID, TID, CPU%, MEM) to the terminal with **color-coded status**.
 - **Actively Optimizes:** Dynamically adjusts CPU priority (`renice`) and I/O priority (`ionice`) for heavy threads.
 - **Efficacy Reporting:** Tracks and reports the number of successful optimizations per cycle.
 - **Contextual Awareness:** Includes system-wide troubleshooting data (Load Average, Memory Pressure) in every cycle.
-- **Safety Features:** Includes dependency checks and graceful shutdown (`Ctrl+C`) handling.
+- **Safety Features:** Includes **automatic dependency management**, grouped redirects for efficiency, and a **Dry Run / Test mode**.
+- **Full Transparency:** Uses `tee` to provide live log data for troubleshooting and full transparency.
+- **Self-Testing Logic:** Includes an internal `assert` helper and a `--self-test` suite that verifies every major code block (logging, dependency checks, and process parsing).
 
 ## How to Use the Repo
 
-### 1. Prerequisites
-Ensure you are running on a Linux-based system with `ps`, `awk`, `renice`, and `ionice` installed.
-
-### 2. Running the Optimizer
-You can run the latest version (`v3`) directly using `bash`:
+### 1. Running the Optimizer
+The script now handles its own dependencies. You can run the utility directly using `bash`:
 ```bash
-bash firefox_content_opt_v3.sh
+bash firefox_content_opt.sh
 ```
 
-### 3. Monitoring Output
-- **Terminal:** A colorized live feed showing active threads and optimization events.
+### 2. Testing the Code (Dry Run)
+To verify the logic and see what *would* be optimized without actually changing process priorities, use the `--test` flag:
+```bash
+bash firefox_content_opt.sh --test
+```
+
+### 3. Internal Self-Test
+To run the internal suite that verifies the functionality of every major code block:
+```bash
+bash firefox_content_opt.sh --self-test
+```
+
+### 4. Monitoring Output
+- **Terminal:** A colorized live feed showing active threads and optimization events, powered by `tee` for full transparency.
 - **Logs:** A clean, ANSI-stripped audit trail is maintained in `./active_threads.log`.
 
-### 4. Customization
-You can edit the variables at the top of `firefox_content_opt_v2.sh` to adjust:
+### 5. Customization
+You can edit the variables at the top of `firefox_content_opt.sh` to adjust:
 - `MIN_CPU`: The threshold for what is considered an "active" thread.
 - `RENICE_VAL`: How much to lower the priority of heavy threads.
 - `MONITOR_INTERVAL`: How often to sample the system.
