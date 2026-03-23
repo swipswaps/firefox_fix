@@ -4,6 +4,7 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import { spawn, ChildProcess } from "child_process";
+import cookieParser from "cookie-parser";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +17,18 @@ const CONFIG = {
   MAX_LOG_LINES: 100,
   METRICS_WINDOW: 500,
   POLL_INTERVAL: 2000,
+  BACKUP_DIR: "backups",
+  AUTH_COOKIE: "fx_opt_auth",
+  DASHBOARD_PASSWORD: process.env.DASHBOARD_PASSWORD || "admin123",
+  SUDO_PASSWORD: process.env.SUDO_PASSWORD || "",
+};
+
+// Runtime state for dynamic config
+let runtimeConfig = {
+  minCpu: 0.1,
+  optimizeThreshold: 5.0,
+  reniceVal: 5,
+  monitorInterval: 2
 };
 
 /**
@@ -49,7 +62,39 @@ function readLastLines(filePath: string, maxLines: number): string[] {
 
 async function startServer() {
   const app = express();
+  app.use(cookieParser("fx-opt-secret"));
+  app.use(express.json());
   let optimizerProcess: ChildProcess | null = null;
+
+  // Auth Middleware
+  const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (req.signedCookies[CONFIG.AUTH_COOKIE] === "authenticated") {
+      return next();
+    }
+    res.status(401).json({ error: "Unauthorized" });
+  };
+
+  // Login Endpoint
+  app.post("/api/login", (req, res) => {
+    const { password } = req.body;
+    if (password === CONFIG.DASHBOARD_PASSWORD) {
+      res.cookie(CONFIG.AUTH_COOKIE, "authenticated", {
+        signed: true,
+        httpOnly: true,
+        maxAge: 86400000, // 24h
+        sameSite: 'none',
+        secure: true
+      });
+      return res.json({ success: true });
+    }
+    res.status(401).json({ error: "Invalid password" });
+  });
+
+  // Logout Endpoint
+  app.post("/api/logout", (req, res) => {
+    res.clearCookie(CONFIG.AUTH_COOKIE);
+    res.json({ success: true });
+  });
 
   function startOptimizer() {
     const optimizerPath = path.join(process.cwd(), CONFIG.OPTIMIZER_SCRIPT);
@@ -62,7 +107,14 @@ async function startServer() {
       fs.chmodSync(optimizerPath, '755');
       console.log(`Starting Firefox Content Optimizer (Forensic: ${process.env.FORENSIC_MODE || 'false'})...`);
       
-      const env = { ...process.env };
+      const env = { 
+        ...process.env,
+        MIN_CPU: runtimeConfig.minCpu.toString(),
+        OPTIMIZE_THRESHOLD: runtimeConfig.optimizeThreshold.toString(),
+        RENICE_VAL: runtimeConfig.reniceVal.toString(),
+        MONITOR_INTERVAL: runtimeConfig.monitorInterval.toString(),
+        SUDO_PASSWORD: CONFIG.SUDO_PASSWORD
+      };
       optimizerProcess = spawn("bash", [optimizerPath], { env });
 
       optimizerProcess.stdout?.on("data", (data) => {
@@ -86,7 +138,7 @@ async function startServer() {
   startOptimizer();
 
   // API: Get latest logs
-  app.get("/api/logs", (req, res) => {
+  app.get("/api/logs", requireAuth, (req, res) => {
     const logPath = path.join(process.cwd(), CONFIG.LOG_FILE);
     const lines = readLastLines(logPath, CONFIG.MAX_LOG_LINES);
     
@@ -98,17 +150,53 @@ async function startServer() {
   });
 
   // API: Get system status
-  app.get("/api/status", (req, res) => {
+  app.get("/api/status", requireAuth, (req, res) => {
     res.json({
       status: "running",
       optimizer: optimizerProcess ? "active" : "failed",
       forensicMode: process.env.FORENSIC_MODE === "true",
+      config: runtimeConfig,
       lastUpdate: new Date().toISOString(),
     });
   });
 
+  // API: Update runtime config
+  app.post("/api/config", requireAuth, (req, res) => {
+    const { minCpu, optimizeThreshold, reniceVal, monitorInterval } = req.body;
+    
+    if (minCpu !== undefined) runtimeConfig.minCpu = parseFloat(minCpu);
+    if (optimizeThreshold !== undefined) runtimeConfig.optimizeThreshold = parseFloat(optimizeThreshold);
+    if (reniceVal !== undefined) runtimeConfig.reniceVal = parseInt(reniceVal);
+    if (monitorInterval !== undefined) runtimeConfig.monitorInterval = parseInt(monitorInterval);
+
+    // Restart optimizer to apply new config via environment variables
+    if (optimizerProcess) {
+      optimizerProcess.kill();
+      optimizerProcess = null;
+      setTimeout(startOptimizer, 500);
+    }
+
+    res.json({ status: "Configuration updated. System restarting...", config: runtimeConfig });
+  });
+
+  // API: Generate Forensic Report
+  app.get("/api/report", requireAuth, (req, res) => {
+    const logPath = path.join(process.cwd(), CONFIG.LOG_FILE);
+    const report = {
+      generatedAt: new Date().toISOString(),
+      systemStatus: optimizerProcess ? "active" : "failed",
+      config: runtimeConfig,
+      forensicMode: process.env.FORENSIC_MODE === "true",
+      recentLogs: readLastLines(logPath, 500)
+    };
+    
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename=forensic_report.json');
+    res.send(JSON.stringify(report, null, 2));
+  });
+
   // API: System Recovery
-  app.get("/api/recover", async (req, res) => {
+  app.get("/api/recover", requireAuth, async (req, res) => {
     console.log("SYSTEM: Initiating recovery sequence...");
     
     if (optimizerProcess) {
@@ -121,7 +209,8 @@ async function startServer() {
       if (fs.existsSync(lockPath)) {
         fs.unlinkSync(lockPath);
       }
-      spawn("pkill", ["-f", CONFIG.OPTIMIZER_SCRIPT]);
+      const pk = spawn("pkill", ["-f", CONFIG.OPTIMIZER_SCRIPT]);
+      pk.on('error', (err) => console.warn("Recovery: pkill not available:", err.message));
     } catch (err) {
       console.warn("Recovery: Cleanup warning:", err);
     }
@@ -133,7 +222,7 @@ async function startServer() {
   });
 
   // API: Toggle Forensic Mode
-  app.post("/api/forensic/toggle", (req, res) => {
+  app.post("/api/forensic/toggle", requireAuth, (req, res) => {
     const current = process.env.FORENSIC_MODE === "true";
     process.env.FORENSIC_MODE = (!current).toString();
     
@@ -147,7 +236,7 @@ async function startServer() {
   });
 
   // API: Get metrics for D3 visualization
-  app.get("/api/metrics", (req, res) => {
+  app.get("/api/metrics", requireAuth, (req, res) => {
     const logPath = path.join(process.cwd(), CONFIG.LOG_FILE);
     const recentLines = readLastLines(logPath, CONFIG.METRICS_WINDOW);
     

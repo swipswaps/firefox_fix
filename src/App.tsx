@@ -160,6 +160,8 @@ export default function AppWrapper() {
 }
 
 function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
+  const [password, setPassword] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const [status, setStatus] = useState<any>(null);
   const [metricsHistory, setMetricsHistory] = useState<any[]>([]);
@@ -167,9 +169,39 @@ function App() {
   const logEndRef = useRef<HTMLDivElement>(null);
   const lastOptimizedCount = useRef(0);
 
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      if (res.ok) {
+        setIsLoggedIn(true);
+        toast.success("Access Granted", { description: "Kernel link established." });
+      } else {
+        toast.error("Access Denied", { description: "Invalid system credentials." });
+      }
+    } catch (err) {
+      toast.error("Login Error");
+    }
+  };
+
+  const handleLogout = async () => {
+    await fetch("/api/logout", { method: "POST" });
+    setIsLoggedIn(false);
+    window.location.reload();
+  };
+
   const fetchLogs = async () => {
+    if (!isLoggedIn) return;
     try {
       const res = await fetch("/api/logs");
+      if (res.status === 401) {
+        setIsLoggedIn(false);
+        return;
+      }
       if (!res.ok) throw new Error("Log fetch failed");
       const data = await res.json();
       setLogs(data.lines);
@@ -183,17 +215,60 @@ function App() {
   const fetchStatus = async () => {
     try {
       const res = await fetch("/api/status");
+      if (res.status === 401) {
+        setIsLoggedIn(false);
+        return;
+      }
       if (!res.ok) throw new Error("Status fetch failed");
       const data = await res.json();
       setStatus(data);
+      setIsLoggedIn(true);
     } catch (err) {
       console.error("Failed to fetch status", err);
+      if (isLoggedIn === null) setIsLoggedIn(false);
+    }
+  };
+
+  const updateConfig = async (newConfig: any) => {
+    try {
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newConfig),
+      });
+      const data = await res.json();
+      toast.success("Configuration Updated", { description: data.status });
+      fetchStatus();
+    } catch (err) {
+      toast.error("Failed to update configuration");
+    }
+  };
+
+  const downloadReport = async () => {
+    try {
+      const res = await fetch("/api/report");
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `forensic_report_${new Date().getTime()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      toast.success("Forensic Report Generated");
+    } catch (err) {
+      toast.error("Failed to generate report");
     }
   };
 
   const fetchMetrics = async () => {
+    if (!isLoggedIn) return;
     try {
       const res = await fetch("/api/metrics");
+      if (res.status === 401) {
+        setIsLoggedIn(false);
+        return;
+      }
       if (!res.ok) throw new Error("Metrics fetch failed");
       const data = await res.json();
       
@@ -220,20 +295,74 @@ function App() {
   };
 
   useEffect(() => {
-    fetchLogs();
     fetchStatus();
-    fetchMetrics();
+  }, []);
+
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    
+    fetchLogs();
     const interval = setInterval(() => {
       fetchLogs();
       fetchStatus();
       fetchMetrics();
     }, 2000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isLoggedIn]);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
+
+  if (isLoggedIn === false || isLoggedIn === null) {
+    return (
+      <div className="min-h-screen bg-[#0A0A0B] text-white flex items-center justify-center p-6 font-sans selection:bg-[#F27D26] selection:text-black">
+        <div className="fixed inset-0 grid-pattern opacity-20 pointer-events-none" />
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-md hardware-card p-12 space-y-8 relative overflow-hidden"
+        >
+          <div className="scanline" />
+          <div className="text-center space-y-2">
+            <h1 className="text-4xl font-black uppercase tracking-tighter leading-none">
+              Firefox<br />
+              <span className="text-[#F27D26]">Optimizer</span>
+            </h1>
+            <p className="hardware-label !text-[10px] opacity-40 uppercase tracking-widest">
+              Restricted Kernel Access
+            </p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-6">
+            <div className="space-y-2">
+              <label className="hardware-label !text-[10px] opacity-60">System Password</label>
+              <input 
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoFocus
+                className="w-full bg-white/5 border border-white/10 rounded-sm p-4 font-mono text-center tracking-[0.5em] focus:outline-none focus:border-[#F27D26]/50 transition-colors"
+                placeholder="••••••••"
+              />
+            </div>
+            <button 
+              type="submit"
+              className="w-full py-4 bg-[#F27D26] text-black font-black uppercase text-[12px] tracking-[0.3em] rounded-sm hover:brightness-110 transition-all flex items-center justify-center gap-2"
+            >
+              <Shield size={16} /> Establish Link
+            </button>
+          </form>
+
+          <div className="pt-8 border-t border-white/5 flex justify-center gap-4 opacity-20">
+            <div className="w-1.5 h-1.5 rounded-full bg-white" />
+            <div className="w-1.5 h-1.5 rounded-full bg-white" />
+            <div className="w-1.5 h-1.5 rounded-full bg-white" />
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#0A0A0B] text-white font-sans selection:bg-[#F27D26] selection:text-black">
@@ -273,6 +402,12 @@ function App() {
             <div className="hardware-label !text-[9px] opacity-40">
               {status?.lastUpdate ? new Date(status.lastUpdate).toLocaleTimeString() : '00:00:00'}
             </div>
+            <button 
+              onClick={handleLogout}
+              className="hardware-label !text-[9px] hover:text-red-500 transition-colors uppercase tracking-widest opacity-40 hover:opacity-100"
+            >
+              Log Out
+            </button>
           </div>
         </div>
       </nav>
@@ -302,7 +437,20 @@ function App() {
                   </div>
                   <div className="text-[10px] font-mono opacity-30">AUTO</div>
                 </div>
-                <div className="hardware-value text-3xl group-hover:text-[#F27D26] transition-colors">5.0%</div>
+                <div className="flex items-center gap-4">
+                  <div className="hardware-value text-3xl group-hover:text-[#F27D26] transition-colors">
+                    {status?.config?.optimizeThreshold?.toFixed(1) || '5.0'}%
+                  </div>
+                  <input 
+                    type="range" 
+                    min="0.1" 
+                    max="50" 
+                    step="0.5"
+                    value={status?.config?.optimizeThreshold || 5.0}
+                    onChange={(e) => updateConfig({ optimizeThreshold: e.target.value })}
+                    className="flex-1 accent-[#F27D26] h-1 bg-white/10 rounded-lg appearance-none cursor-pointer"
+                  />
+                </div>
               </div>
 
               <div className="group">
@@ -312,17 +460,43 @@ function App() {
                   </div>
                   <div className="text-[10px] font-mono opacity-30">STATIC</div>
                 </div>
-                <div className="hardware-value text-3xl group-hover:text-[#F27D26] transition-colors">+5</div>
+                <div className="flex items-center gap-4">
+                  <div className="hardware-value text-3xl group-hover:text-[#F27D26] transition-colors">
+                    +{status?.config?.reniceVal || '5'}
+                  </div>
+                  <input 
+                    type="range" 
+                    min="1" 
+                    max="19" 
+                    step="1"
+                    value={status?.config?.reniceVal || 5}
+                    onChange={(e) => updateConfig({ reniceVal: e.target.value })}
+                    className="flex-1 accent-[#F27D26] h-1 bg-white/10 rounded-lg appearance-none cursor-pointer"
+                  />
+                </div>
               </div>
 
               <div className="group">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2 hardware-label">
-                    <HardDrive size={12} /> I/O Class
+                    <Activity size={12} /> Interval (s)
                   </div>
-                  <div className="text-[10px] font-mono opacity-30">B-EFFORT</div>
+                  <div className="text-[10px] font-mono opacity-30">POLL</div>
                 </div>
-                <div className="hardware-value text-3xl group-hover:text-[#F27D26] transition-colors">Class 2</div>
+                <div className="flex items-center gap-4">
+                  <div className="hardware-value text-3xl group-hover:text-[#F27D26] transition-colors">
+                    {status?.config?.monitorInterval || '2'}s
+                  </div>
+                  <input 
+                    type="range" 
+                    min="1" 
+                    max="10" 
+                    step="1"
+                    value={status?.config?.monitorInterval || 2}
+                    onChange={(e) => updateConfig({ monitorInterval: e.target.value })}
+                    className="flex-1 accent-[#F27D26] h-1 bg-white/10 rounded-lg appearance-none cursor-pointer"
+                  />
+                </div>
               </div>
             </div>
 
@@ -350,6 +524,13 @@ function App() {
             </div>
             
             <div className="space-y-4">
+              <button 
+                onClick={downloadReport}
+                className="w-full p-3 rounded border border-blue-500/30 bg-blue-500/5 text-blue-500 hover:bg-blue-500/10 transition-all flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-wider"
+              >
+                <BarChart3 size={14} /> Generate Report
+              </button>
+
               <button 
                 onClick={async () => {
                   const res = await fetch('/api/forensic/toggle', { method: 'POST' });

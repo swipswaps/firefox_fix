@@ -23,13 +23,13 @@ set -euo pipefail
 OUTPUT_FILE="./active_threads.log"
 LOCK_FILE="./optimizer.lock"
 MAX_LOG_SIZE_KB=1024            # Rotate log after 1MB
-MIN_CPU=0.1                     # Threshold for "active" (0.1% CPU)
-RENICE_VAL=5                    # Lower priority (higher nice value)
+MIN_CPU=${MIN_CPU:-0.1}         # Threshold for "active" (0.1% CPU)
+RENICE_VAL=${RENICE_VAL:-5}     # Lower priority (higher nice value)
 IONICE_CLASS=2                  # Best-effort
 IONICE_PRIO=7                   # Lowest priority within class
-MONITOR_INTERVAL=2              # Seconds between cycles
+MONITOR_INTERVAL=${MONITOR_INTERVAL:-2} # Seconds between cycles
 TIMESTAMP_PREFIX="Timestamp:"
-OPTIMIZE_THRESHOLD=5.0          # CPU % to trigger renice/ionice
+OPTIMIZE_THRESHOLD=${OPTIMIZE_THRESHOLD:-5.0} # CPU % to trigger renice/ionice
 DRY_RUN=${DRY_RUN:-false}       # Set to true to skip actual renice/ionice
 FORENSIC_MODE=${FORENSIC_MODE:-false} # Set to true for deep thread analysis
 SELF_TEST_MODE=false            # Internal flag for self-test
@@ -89,13 +89,25 @@ init_sudo() {
     fi
 
     printf "${BLUE}Requesting administrative privileges for process optimization...${NC}\n"
-    # Prompt for password once
+    
+    # Check if password is provided via env
+    local sudo_cmd="sudo -v"
+    if [[ -n "${SUDO_PASSWORD:-}" ]]; then
+        printf "%s" "$SUDO_PASSWORD" | sudo -S -v 2>/dev/null
+    else
+        # Prompt for password once (if interactive)
+        sudo -n -v 2>/dev/null
+    fi
+
     if sudo -n -v 2>/dev/null; then
         # Keep-alive sudo in background subshell
-        # Best Practice: Use a loop that exits if the parent process dies
         (
             while kill -0 "$$" 2>/dev/null; do
-                sudo -n -v 2>/dev/null || exit
+                if [[ -n "${SUDO_PASSWORD:-}" ]]; then
+                    printf "%s" "$SUDO_PASSWORD" | sudo -S -v 2>/dev/null || exit
+                else
+                    sudo -n -v 2>/dev/null || exit
+                fi
                 sleep 60
             done
         ) &
@@ -111,7 +123,7 @@ init_sudo() {
 # Dependency management
 # Best Practice: Map tools to packages explicitly for multiple managers
 check_dependencies() {
-    local tools=("ps" "awk" "grep" "uptime" "free" "renice" "ionice" "sed" "tee" "lsof" "strace")
+    local tools=("ps" "awk" "grep" "uptime" "free" "renice" "ionice" "sed" "tee" "lsof" "strace" "bc")
     local missing=()
 
     assert "[[ ${#tools[@]} -gt 0 ]]" "Tools list for dependency check is empty"
