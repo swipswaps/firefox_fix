@@ -4,6 +4,14 @@ A professional, full-stack system utility designed to monitor and optimize Firef
 
 ---
 
+## 📋 Prerequisites
+
+- **Linux Environment**: The optimizer script relies on Linux-specific utilities (`ps`, `renice`, `ionice`).
+  - **Supported Distributions**: Ubuntu/Debian (`apt`), Fedora/RHEL (`dnf`/`yum`).
+- **Node.js**: Required for the backend and frontend.
+
+---
+
 ## ⚡ Quick Start (Test It Now)
 
 ### 1. Clone the Repository

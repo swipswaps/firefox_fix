@@ -139,7 +139,17 @@ check_dependencies() {
         
         if has_sudo; then
             printf "${BLUE}Attempting to install missing tools via sudo...${NC}\n"
-            if command -v apt-get >/dev/null 2>&1; then
+            if command -v dnf >/dev/null 2>&1; then
+                # Fedora/RHEL support
+                for tool in "${missing[@]}"; do
+                    case "$tool" in
+                        "ps"|"free"|"uptime") sudo dnf install -y -q procps-ng ;;
+                        "renice") sudo dnf install -y -q util-linux ;;
+                        "ionice") sudo dnf install -y -q util-linux ;;
+                        *) sudo dnf install -y -q "$tool" ;;
+                    esac
+                done
+            elif command -v apt-get >/dev/null 2>&1; then
                 sudo apt-get update -qq
                 for tool in "${missing[@]}"; do
                     case "$tool" in
