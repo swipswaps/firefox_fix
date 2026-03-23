@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 const CONFIG = {
   PORT: 3000,
   LOG_FILE: "active_threads.log",
-  LOCK_FILE: "firefox_opt.lock",
+  LOCK_FILE: "firefox_optimizer.lock",
   OPTIMIZER_SCRIPT: "firefox_content_opt.sh",
   MAX_LOG_LINES: 100,
   METRICS_WINDOW: 500,
@@ -62,7 +62,7 @@ function readLastLines(filePath: string, maxLines: number): string[] {
 
 async function startServer() {
   const app = express();
-  app.use(cookieParser("fx-opt-secret"));
+  app.use(cookieParser(process.env.AUTH_SECRET || "fx-opt-secret-default"));
   app.use(express.json());
   let optimizerProcess: ChildProcess | null = null;
 

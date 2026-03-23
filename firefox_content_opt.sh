@@ -21,7 +21,7 @@ set -euo pipefail
 # -----------------------------
 # Use absolute paths where possible or ensure relative paths are safe
 OUTPUT_FILE="./active_threads.log"
-LOCK_FILE="./optimizer.lock"
+LOCK_FILE="./firefox_optimizer.lock"
 MAX_LOG_SIZE_KB=1024            # Rotate log after 1MB
 MIN_CPU=${MIN_CPU:-0.1}         # Threshold for "active" (0.1% CPU)
 RENICE_VAL=${RENICE_VAL:-5}     # Lower priority (higher nice value)
@@ -123,7 +123,7 @@ init_sudo() {
 # Dependency management
 # Best Practice: Map tools to packages explicitly for multiple managers
 check_dependencies() {
-    local tools=("ps" "awk" "grep" "uptime" "free" "renice" "ionice" "sed" "tee" "lsof" "strace" "bc")
+    local tools=("ps" "pkill" "awk" "grep" "uptime" "free" "renice" "ionice" "sed" "tee" "lsof" "strace" "bc")
     local missing=()
 
     assert "[[ ${#tools[@]} -gt 0 ]]" "Tools list for dependency check is empty"
@@ -143,7 +143,7 @@ check_dependencies() {
                 # Fedora/RHEL support
                 for tool in "${missing[@]}"; do
                     case "$tool" in
-                        "ps"|"free"|"uptime") sudo dnf install -y -q procps-ng ;;
+                        "ps"|"pkill"|"free"|"uptime") sudo dnf install -y -q procps-ng ;;
                         "renice") sudo dnf install -y -q util-linux ;;
                         "ionice") sudo dnf install -y -q util-linux ;;
                         *) sudo dnf install -y -q "$tool" ;;
@@ -153,7 +153,7 @@ check_dependencies() {
                 sudo apt-get update -qq
                 for tool in "${missing[@]}"; do
                     case "$tool" in
-                        "ps"|"free"|"uptime") sudo apt-get install -y -qq procps ;;
+                        "ps"|"pkill"|"free"|"uptime") sudo apt-get install -y -qq procps ;;
                         "renice") sudo apt-get install -y -qq bsdutils ;;
                         "ionice") sudo apt-get install -y -qq util-linux ;;
                         *) sudo apt-get install -y -qq "$tool" ;;

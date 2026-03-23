@@ -177,6 +177,7 @@ function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password }),
+        credentials: "include",
       });
       if (res.ok) {
         setIsLoggedIn(true);
@@ -198,7 +199,7 @@ function App() {
   const fetchLogs = async () => {
     if (!isLoggedIn) return;
     try {
-      const res = await fetch("/api/logs");
+      const res = await fetch("/api/logs", { credentials: "include" });
       if (res.status === 401) {
         setIsLoggedIn(false);
         return;
@@ -215,7 +216,7 @@ function App() {
 
   const fetchStatus = async () => {
     try {
-      const res = await fetch("/api/status");
+      const res = await fetch("/api/status", { credentials: "include" });
       if (res.status === 401) {
         setIsLoggedIn(false);
         return;
@@ -236,6 +237,7 @@ function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newConfig),
+        credentials: "include",
       });
       const data = await res.json();
       toast.success("Configuration Updated", { description: data.status });
@@ -247,7 +249,7 @@ function App() {
 
   const downloadReport = async () => {
     try {
-      const res = await fetch("/api/report");
+      const res = await fetch("/api/report", { credentials: "include" });
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -265,7 +267,7 @@ function App() {
   const fetchMetrics = async () => {
     if (!isLoggedIn) return;
     try {
-      const res = await fetch("/api/metrics");
+      const res = await fetch("/api/metrics", { credentials: "include" });
       if (res.status === 401) {
         setIsLoggedIn(false);
         return;
@@ -562,7 +564,10 @@ function App() {
 
               <button 
                 onClick={async () => {
-                  const res = await fetch('/api/forensic/toggle', { method: 'POST' });
+                  const res = await fetch('/api/forensic/toggle', { 
+                    method: 'POST',
+                    credentials: 'include'
+                  });
                   const data = await res.json();
                   toast.info(`Forensic Mode ${data.forensicMode ? 'Enabled' : 'Disabled'}`, {
                     description: data.forensicMode ? 'Deep thread analysis active.' : 'Standard monitoring active.'
@@ -581,7 +586,7 @@ function App() {
                 onClick={async () => {
                   toast.loading('Initiating system recovery...', { id: 'recovery' });
                   try {
-                    const res = await fetch('/api/recover');
+                    const res = await fetch('/api/recover', { credentials: 'include' });
                     const data = await res.json();
                     toast.success('Recovery Successful', { 
                       id: 'recovery',
