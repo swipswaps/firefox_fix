@@ -165,6 +165,7 @@ function App() {
   const [logs, setLogs] = useState<string[]>([]);
   const [status, setStatus] = useState<any>(null);
   const [metricsHistory, setMetricsHistory] = useState<any[]>([]);
+  const [totalThrottled, setTotalThrottled] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
   const lastOptimizedCount = useRef(0);
@@ -280,6 +281,7 @@ function App() {
         // Trigger toast if optimized count increased
         if (data.optimized > lastOptimizedCount.current) {
           const diff = data.optimized - lastOptimizedCount.current;
+          setTotalThrottled(prev => prev + diff);
           toast.success(`Optimization Event`, {
             description: `Throttled ${diff} heavy Firefox thread(s).`,
             icon: <Zap size={14} className="text-[#F27D26]" />,
@@ -424,6 +426,33 @@ function App() {
             <p className="hardware-label !text-[10px] opacity-50 max-w-[200px]">
               Real-time kernel-level priority adjustment for multi-threaded content processes.
             </p>
+          </div>
+
+          <div className="hardware-card p-4 bg-white/[0.02] border-white/5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 hardware-label !text-[8px]">
+                <Shield size={10} className="text-[#F27D26]" /> Sudo Status
+              </div>
+              <div className={`px-2 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-widest ${status?.sudoStatus === 'acquired' ? 'bg-green-500/20 text-green-500' : 'bg-red-500/20 text-red-500'}`}>
+                {status?.sudoStatus || 'Checking...'}
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 hardware-label !text-[8px]">
+                <Zap size={10} className="text-[#F27D26]" /> Total Throttled
+              </div>
+              <div className="text-[10px] font-mono font-bold text-[#F27D26]">
+                {totalThrottled}
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 hardware-label !text-[8px]">
+                <RefreshCw size={10} className="text-[#F27D26]" /> Last Cycle
+              </div>
+              <div className="text-[8px] font-mono opacity-40">
+                {status?.lastUpdate ? new Date(status.lastUpdate).toLocaleTimeString() : '--:--:--'}
+              </div>
+            </div>
           </div>
 
           <div className="hardware-card p-6 space-y-8">

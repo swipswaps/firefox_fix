@@ -150,11 +150,22 @@ async function startServer() {
   });
 
   // API: Get system status
-  app.get("/api/status", requireAuth, (req, res) => {
+  app.get("/api/status", requireAuth, async (req, res) => {
+    let sudoStatus = "missing";
+    try {
+      // Check if sudo is available non-interactively
+      const { execSync } = await import("child_process");
+      execSync("sudo -n true 2>/dev/null");
+      sudoStatus = "acquired";
+    } catch (err) {
+      sudoStatus = "missing";
+    }
+
     res.json({
       status: "running",
       optimizer: optimizerProcess ? "active" : "failed",
       forensicMode: process.env.FORENSIC_MODE === "true",
+      sudoStatus,
       config: runtimeConfig,
       lastUpdate: new Date().toISOString(),
     });

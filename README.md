@@ -1,115 +1,107 @@
-# Firefox Process Optimizer
+# 🔥 Firefox Process Optimizer
 
-A full-stack, real-time system utility designed to monitor and optimize Firefox's multi-threaded content processes. This application combines a high-performance Bash engine with a modern React/D3.js dashboard to provide full transparency and control over browser resource consumption.
+A professional, full-stack system utility designed to monitor and optimize Firefox's multi-threaded content processes. This application combines a high-performance Bash engine with a modern React/D3.js dashboard to provide full transparency and control over browser resource consumption.
 
-## 🚀 Architecture Overview
+---
 
-The system operates across three distinct layers to ensure reliability, performance, and real-time visibility:
+## ⚡ Quick Start (Test It Now)
 
-### 1. The Optimizer Engine (`firefox_content_opt.sh`)
-A robust Bash script that serves as the system's "heart." It performs the heavy lifting of process monitoring and kernel-level priority adjustments.
-- **Capture**: Actively queries the system for Firefox threads using `ps -eL`.
-- **Filter**: Automatically ignores idle threads to focus on performance hotspots (default > 5% CPU).
-- **Optimize**: Dynamically adjusts CPU priority (`renice`) and I/O priority (`ionice`) for heavy threads.
-- **Forensic Audit**: When enabled, performs deep analysis using `lsof` (open files) and `strace` (syscall summary) for heavy threads.
-- **Audit**: Generates a real-time log (`active_threads.log`) with color-coded status and system-wide troubleshooting data.
-- **Backups**: Automatically creates timestamped log backups in the `backups/` directory every 100 cycles.
-- **Safety**: Uses a lockfile mechanism to prevent duplicate instances and includes a `--test` (dry run) mode.
+### 1. Clone the Repository
+```bash
+git clone https://github.com/swipswaps/firefox_fix.git
+cd firefox_fix
+```
 
-### 2. The Backend API (`server.ts`)
-An Express server that bridges the gap between the low-level Bash engine and the high-level UI.
-- **Process Management**: Spawns the optimizer script as a detached background process and ensures graceful cleanup on shutdown.
-- **Log Streaming**: Efficiently reads the tail of the log file and serves it via `/api/logs`.
-- **Metrics Aggregation**: Parses log data to provide real-time metrics (optimized events vs active threads) via `/api/metrics`.
-- **Status Monitoring**: Tracks the health of the background process via `/api/status`.
-
-### 3. The Dashboard UI (`src/App.tsx`)
-A high-fidelity React application designed for real-time monitoring and system transparency, featuring a custom **Hardware/Specialist Tool** aesthetic.
-- **Hardware Theme**: A distinct visual style with custom CSS variables, fonts (`JetBrains Mono`), and elements like `hardware-card`, `status-pulse`, and a background `grid-pattern`.
-- **Live Audit Trail**: A terminal-like view that streams the optimizer's logs with syntax highlighting.
-- **Forensic Mode**: Toggleable deep analysis that provides "X-ray" visibility into process behavior.
-- **Emergency Recovery**: A one-click abstraction that handles process cleanup, lockfile removal, and system restart.
-- **Real-time Toast Notifications**: Integrated `sonner` for non-intrusive alerts on optimization events.
-- **D3.js Visualization**: A real-time line chart visualizing the relationship between system activity and optimization events.
-- **Detailed Metrics**: Real-time tracking of Total CPU Load and Memory Footprint for all Firefox content processes.
-- **Resilience**: Features a custom Error Boundary for UI stability and a connection monitor that detects backend outages.
-- **Motion Design**: Uses `motion/react` for smooth state transitions and high-energy UI feedback.
-
-## 🛠️ Key Features
-
-- **Real-time Evidence**: Unlike "black box" optimizers, this tool provides a live audit trail of every kernel-level change it makes.
-- **Kernel-Level Precision**: Uses `renice` and `ionice` to ensure Firefox doesn't starve the rest of the system during heavy loads.
-- **D3 Visualization**: High-performance data rendering to track optimization efficacy over time.
-- **Fail-Safe Design**:
-    - **Backend**: Automatic dependency checks and permission management (`chmod 755`).
-    - **Frontend**: Error boundaries and offline state indicators.
-    - **Script**: Lockfile protection and self-test suite.
-
-## 🚦 Getting Started
-
-### 1. Prerequisites
-- **Linux Environment**: The optimizer script relies on Linux-specific utilities (`ps`, `renice`, `ionice`).
-- **Node.js**: Required for the backend and frontend.
-
-### 2. Installation
-Install the necessary dependencies:
+### 2. Install Dependencies
 ```bash
 npm install
 ```
 
-### 3. Running the Application
-Start the full-stack application (Backend + Frontend):
+### 3. Configure Environment (Optional)
+Create a `.env` file based on `.env.example`:
+```bash
+cp .env.example .env
+```
+*   **`DASHBOARD_PASSWORD`**: The password for the web interface. Default is `admin123`.
+*   **`SUDO_PASSWORD`**: (Optional) Your system's administrative password. If provided, the optimizer can non-interactively adjust process priorities. If omitted, the system will attempt to run with limited privileges.
+
+### 4. Run the Application
 ```bash
 npm run dev
 ```
-The application will be accessible at `http://localhost:3000`.
+The dashboard will be available at `http://localhost:3000`.
 
-### 4. Testing the Engine
-You can run the Bash engine independently for testing:
-- **Dry Run**: `bash firefox_content_opt.sh --test`
-- **Self-Test**: `bash firefox_content_opt.sh --self-test`
+---
 
-## 📖 User Guide
+## 🔐 Default Credentials
+*   **Password**: `admin123` (Change this via `DASHBOARD_PASSWORD` env var)
 
-### Interpreting the Dashboard
+---
 
-The dashboard is divided into three main sections to provide a comprehensive view of your system's health:
+## 🧪 Testing the Engine
 
-#### 1. Performance Metrics (Left Column)
-- **CPU Threshold**: The minimum CPU usage percentage required for a thread to be considered "active" and eligible for optimization.
-- **Nice Priority**: The value added to the process's current priority. A higher value (e.g., +5) means lower priority, allowing other system tasks to run more smoothly.
-- **I/O Class**: The scheduling class used for disk access. "Best-Effort" ensures Firefox doesn't monopolize your hard drive.
-- **Efficiency Report**: Real-time data on **Total CPU Load** and **Memory Footprint** across all monitored Firefox threads.
+You can run the optimization engine independently to verify its behavior:
 
-#### 2. Activity History (Center Chart)
-- **Orange Line (Optimized)**: Tracks the number of threads that were actively throttled in each cycle.
-- **Green Line (Active Threads)**: Shows the total number of Firefox threads currently exceeding the CPU threshold.
-- **Real-time Updates**: The chart updates every 2 seconds, providing a visual history of system stress and mitigation.
+*   **Dry Run (No changes)**:
+    ```bash
+    bash firefox_content_opt.sh --test
+    ```
+*   **Self-Test (Full diagnostic)**:
+    ```bash
+    bash firefox_content_opt.sh --self-test
+    ```
 
-#### 3. Live Audit Trail (Right Column)
-- **Color-coded Logs**:
-    - **Orange**: Optimization events (e.g., "OPTIMIZED PID: 1234").
-    - **Green**: Active thread detection.
-    - **Blue**: System-level messages and initialization.
-    - **Yellow**: Waiting states (e.g., when Firefox is not running).
-- **Auto-scroll**: The terminal automatically scrolls to the latest entry, ensuring you always see the most recent system actions.
+---
 
-### Troubleshooting & Status Indicators
+## 🛠️ Key Features
 
-- **System Active (Green Pulse)**: The background optimizer is running and actively monitoring your system.
-- **System Offline (Red Pulse)**: The background process has failed or been stopped. Check the server logs for details.
-- **Real-time Toasts**: When an optimization event occurs (a thread is throttled), a toast notification will appear in the bottom-right corner.
-- **Connection Lost**: If you see a red "Connection Lost" banner, the UI cannot reach the backend API. Click the **Refresh** icon next to the banner to attempt a reconnection.
-- **System Fault Detected**: If the UI crashes, a full-screen error boundary will appear. Use the **Restart Interface** button to re-initialize the dashboard.
+*   **Local Authentication**: Secure dashboard access with signed cookies and password protection.
+*   **Dynamic Configuration**: Adjust CPU thresholds, Nice values, and monitoring intervals in real-time without restarts.
+*   **Sudo Privilege Management**: Robust handling of administrative tasks with a background keep-alive subshell.
+*   **Forensic Audit Mode**: Deep analysis using `lsof` (open files) and `strace` (syscall summary) for heavy threads.
+*   **Emergency Recovery**: One-click system reset to clear lockfiles and restart the optimization engine.
+*   **D3.js Visualization**: Real-time line charts visualizing system activity vs. optimization efficacy.
+*   **Downloadable Reports**: Generate a forensic snapshot of system status and logs in JSON format.
 
-## ⚙️ Configuration
+---
 
-You can customize the optimization parameters at the top of `firefox_content_opt.sh`:
-- `MIN_CPU`: Threshold for "active" thread detection (default: 5.0).
-- `RENICE_VAL`: Priority adjustment value (default: +5).
-- `MONITOR_INTERVAL`: Sampling frequency in seconds (default: 2).
+## 🚀 Architecture Overview
+
+The system operates across three distinct layers:
+
+### 1. The Optimizer Engine (`firefox_content_opt.sh`)
+A robust Bash script that performs the heavy lifting of process monitoring and kernel-level priority adjustments.
+- **Capture**: Queries Firefox threads using `ps -eL`.
+- **Optimize**: Dynamically adjusts CPU priority (`renice`) and I/O priority (`ionice`).
+- **Audit**: Generates a real-time log (`active_threads.log`) with color-coded status.
+
+### 2. The Backend API (`server.ts`)
+An Express server that bridges the gap between the low-level Bash engine and the UI.
+- **Auth Middleware**: Protects all sensitive routes via `requireAuth`.
+- **Process Management**: Spawns the optimizer as a detached background process.
+- **Metrics Aggregation**: Parses log data for real-time dashboard updates.
+
+### 3. The Dashboard UI (`src/App.tsx`)
+A high-fidelity React application with a **Hardware/Specialist Tool** aesthetic.
+- **Live Audit Trail**: Terminal-like view streaming optimizer logs.
+- **Interactive Controls**: Real-time sliders for optimization parameters.
+- **Resilience**: Integrated Error Boundaries and connection monitors.
+
+---
+
+## ⚙️ Configuration Variables
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `MIN_CPU` | CPU threshold for optimization | `5.0%` |
+| `RENICE_VAL` | Priority adjustment value | `+5` |
+| `MONITOR_INTERVAL` | Sampling frequency | `2s` |
+| `DASHBOARD_PASSWORD` | Access password | `admin123` |
+| `SUDO_PASSWORD` | Sudo password for escalation | `""` |
+
+---
 
 ## 🛡️ Safety & Compliance
-- **Lockfile**: Prevents system resource exhaustion from duplicate processes.
-- **Graceful Shutdown**: Ensures all background processes are terminated when the server stops.
-- **Audit Trail**: Maintains a clean, ANSI-stripped log for post-mortem analysis.
+- **Lockfile**: Prevents duplicate processes.
+- **Graceful Shutdown**: Ensures background processes are terminated on exit.
+- **Audit Trail**: Maintains a clean log for post-mortem analysis.

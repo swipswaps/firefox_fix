@@ -243,6 +243,23 @@ forensic_audit() {
         printf "${BLUE}FORENSIC: PID %s Open Files: %d${NC}\n" "$pid" "$files_count" | \
             tee -a >(sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE")
     fi
+
+    # Network Connections (New Forensic Feature)
+    if command -v ss >/dev/null 2>&1; then
+        local net_conns
+        net_conns=$(ss -tpn "pid=$pid" 2>/dev/null | grep -v "State" | head -n 5)
+        if [[ -n "$net_conns" ]]; then
+            printf "${BLUE}FORENSIC: PID %s Network Connections (Top 5):${NC}\n%s\n" "$pid" "$net_conns" | \
+                tee -a >(sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE")
+        fi
+    elif command -v netstat >/dev/null 2>&1; then
+        local net_conns
+        net_conns=$(netstat -tpn 2>/dev/null | grep "$pid/" | head -n 5)
+        if [[ -n "$net_conns" ]]; then
+            printf "${BLUE}FORENSIC: PID %s Network Connections (Top 5):${NC}\n%s\n" "$pid" "$net_conns" | \
+                tee -a >(sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE")
+        fi
+    fi
     
     # Optional: strace a small sample (1s) to see what it's doing
     # This is heavy, so we only do it if explicitly requested or for very heavy threads
