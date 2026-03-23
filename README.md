@@ -11,7 +11,9 @@ A robust Bash script that serves as the system's "heart." It performs the heavy 
 - **Capture**: Actively queries the system for Firefox threads using `ps -eL`.
 - **Filter**: Automatically ignores idle threads to focus on performance hotspots (default > 5% CPU).
 - **Optimize**: Dynamically adjusts CPU priority (`renice`) and I/O priority (`ionice`) for heavy threads.
+- **Forensic Audit**: When enabled, performs deep analysis using `lsof` (open files) and `strace` (syscall summary) for heavy threads.
 - **Audit**: Generates a real-time log (`active_threads.log`) with color-coded status and system-wide troubleshooting data.
+- **Backups**: Automatically creates timestamped log backups in the `backups/` directory every 100 cycles.
 - **Safety**: Uses a lockfile mechanism to prevent duplicate instances and includes a `--test` (dry run) mode.
 
 ### 2. The Backend API (`server.ts`)
@@ -22,9 +24,14 @@ An Express server that bridges the gap between the low-level Bash engine and the
 - **Status Monitoring**: Tracks the health of the background process via `/api/status`.
 
 ### 3. The Dashboard UI (`src/App.tsx`)
-A high-fidelity React application designed for real-time monitoring and system transparency.
+A high-fidelity React application designed for real-time monitoring and system transparency, featuring a custom **Hardware/Specialist Tool** aesthetic.
+- **Hardware Theme**: A distinct visual style with custom CSS variables, fonts (`JetBrains Mono`), and elements like `hardware-card`, `status-pulse`, and a background `grid-pattern`.
 - **Live Audit Trail**: A terminal-like view that streams the optimizer's logs with syntax highlighting.
+- **Forensic Mode**: Toggleable deep analysis that provides "X-ray" visibility into process behavior.
+- **Emergency Recovery**: A one-click abstraction that handles process cleanup, lockfile removal, and system restart.
+- **Real-time Toast Notifications**: Integrated `sonner` for non-intrusive alerts on optimization events.
 - **D3.js Visualization**: A real-time line chart visualizing the relationship between system activity and optimization events.
+- **Detailed Metrics**: Real-time tracking of Total CPU Load and Memory Footprint for all Firefox content processes.
 - **Resilience**: Features a custom Error Boundary for UI stability and a connection monitor that detects backend outages.
 - **Motion Design**: Uses `motion/react` for smooth state transitions and high-energy UI feedback.
 
@@ -72,6 +79,7 @@ The dashboard is divided into three main sections to provide a comprehensive vie
 - **CPU Threshold**: The minimum CPU usage percentage required for a thread to be considered "active" and eligible for optimization.
 - **Nice Priority**: The value added to the process's current priority. A higher value (e.g., +5) means lower priority, allowing other system tasks to run more smoothly.
 - **I/O Class**: The scheduling class used for disk access. "Best-Effort" ensures Firefox doesn't monopolize your hard drive.
+- **Efficiency Report**: Real-time data on **Total CPU Load** and **Memory Footprint** across all monitored Firefox threads.
 
 #### 2. Activity History (Center Chart)
 - **Orange Line (Optimized)**: Tracks the number of threads that were actively throttled in each cycle.
@@ -90,6 +98,7 @@ The dashboard is divided into three main sections to provide a comprehensive vie
 
 - **System Active (Green Pulse)**: The background optimizer is running and actively monitoring your system.
 - **System Offline (Red Pulse)**: The background process has failed or been stopped. Check the server logs for details.
+- **Real-time Toasts**: When an optimization event occurs (a thread is throttled), a toast notification will appear in the bottom-right corner.
 - **Connection Lost**: If you see a red "Connection Lost" banner, the UI cannot reach the backend API. Click the **Refresh** icon next to the banner to attempt a reconnection.
 - **System Fault Detected**: If the UI crashes, a full-screen error boundary will appear. Use the **Restart Interface** button to re-initialize the dashboard.
 

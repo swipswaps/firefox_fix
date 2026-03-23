@@ -31,6 +31,7 @@ MONITOR_INTERVAL=2              # Seconds between cycles
 TIMESTAMP_PREFIX="Timestamp:"
 OPTIMIZE_THRESHOLD=5.0          # CPU % to trigger renice/ionice
 DRY_RUN=${DRY_RUN:-false}       # Set to true to skip actual renice/ionice
+FORENSIC_MODE=${FORENSIC_MODE:-false} # Set to true for deep thread analysis
 SELF_TEST_MODE=false            # Internal flag for self-test
 SUDO_REFRESH_PID=""             # Global to track the refresher
 
@@ -110,7 +111,7 @@ init_sudo() {
 # Dependency management
 # Best Practice: Map tools to packages explicitly for multiple managers
 check_dependencies() {
-    local tools=("ps" "awk" "grep" "uptime" "free" "renice" "ionice" "sed" "tee")
+    local tools=("ps" "awk" "grep" "uptime" "free" "renice" "ionice" "sed" "tee" "lsof" "strace")
     local missing=()
 
     assert "[[ ${#tools[@]} -gt 0 ]]" "Tools list for dependency check is empty"
@@ -204,6 +205,45 @@ cleanup() {
     exit 0
 }
 
+# Backup management
+backup_logs() {
+    local backup_dir="backups"
+    local timestamp
+    timestamp=$(date '+%Y%m%d_%H%M%S')
+    
+    mkdir -p "$backup_dir"
+    if [[ -f "$OUTPUT_FILE" ]]; then
+        cp "$OUTPUT_FILE" "$backup_dir/audit_trail_${timestamp}.log"
+        # Keep only the last 5 backups
+        ls -t "$backup_dir"/audit_trail_*.log | tail -n +6 | xargs rm -f 2>/dev/null
+        log_msg "SYSTEM: Log backup created: audit_trail_${timestamp}.log" "$BLUE"
+    fi
+}
+
+# Forensic Audit for heavy threads
+forensic_audit() {
+    local tid=$1
+    local pid=$2
+    
+    if command -v lsof >/dev/null 2>&1; then
+        local files_count
+        files_count=$(lsof -p "$pid" 2>/dev/null | wc -l)
+        printf "${BLUE}FORENSIC: PID %s Open Files: %d${NC}\n" "$pid" "$files_count" | \
+            tee -a >(sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE")
+    fi
+    
+    # Optional: strace a small sample (1s) to see what it's doing
+    # This is heavy, so we only do it if explicitly requested or for very heavy threads
+    if [[ "$FORENSIC_MODE" == "true" ]] && command -v strace >/dev/null 2>&1; then
+        local syscall_summary
+        syscall_summary=$(timeout 1 strace -p "$tid" -c 2>&1 | grep -A 20 "% time" | tail -n +3 | head -n 5)
+        if [[ -n "$syscall_summary" ]]; then
+            printf "${BLUE}FORENSIC: TID %s Syscall Summary (1s):${NC}\n%s\n" "$tid" "$syscall_summary" | \
+                tee -a >(sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE")
+        fi
+    fi
+}
+
 process_cycle() {
     local ts load mem_info
     ts=$(date '+%Y-%m-%d %H:%M:%S')
@@ -248,6 +288,10 @@ process_cycle() {
 
         # Best Practice: Pass variables to awk using -v to avoid shell injection/quoting issues
         # Use a while loop to handle optimization commands shell-side for better control
+        local total_cpu=0
+        local total_mem=0
+        local active_threads=0
+
         while read -r pid tid cpu rss args; do
             # Harden: Validate that we actually got numeric values for pid/tid/cpu
             if [[ ! "$pid" =~ ^[0-9]+$ || ! "$tid" =~ ^[0-9]+$ ]]; then
@@ -260,6 +304,10 @@ process_cycle() {
             mem_mb=$(( rss / 1024 ))
             status="Active"
             color="$GREEN"
+
+            ((active_threads++))
+            total_cpu=$(echo "$total_cpu + $cpu" | bc 2>/dev/null || echo "$(( total_cpu + cpu_val ))")
+            total_mem=$(( total_mem + mem_mb ))
 
             if (( cpu_val >= MIN_CPU )); then
                 if (( cpu_val >= OPTIMIZE_THRESHOLD )); then
@@ -281,6 +329,9 @@ process_cycle() {
                             status="OPTIMIZED"
                             color="$RED"
                             ((opt_count++))
+                            
+                            # Perform forensic audit on optimized threads
+                            forensic_audit "$tid" "$pid"
                         else
                             # Strip common noise from error messages
                             local clean_err
@@ -295,6 +346,11 @@ process_cycle() {
                     tee -a >(sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE")
             fi
         done <<< "$ps_output"
+
+        # Structured Metrics for Backend Parsing
+        # Format: METRICS | Active: [N] | Optimized: [N] | TotalCPU: [N] | TotalMem: [N]
+        printf "METRICS | Active: %d | Optimized: %d | TotalCPU: %.1f | TotalMem: %d MB\n" \
+            "$active_threads" "$opt_count" "$total_cpu" "$total_mem" | tee -a "$OUTPUT_FILE" > /dev/null
     else
         printf "${YELLOW}Waiting for Firefox content processes... (None active currently)${NC}\n"
     fi
@@ -373,7 +429,15 @@ log_msg "Starting Firefox Content Optimizer (Best Practices Mode)" "$BLUE"
 touch "$OUTPUT_FILE"
 
 # Main loop
+cycle=0
 while true; do
+    ((cycle++))
     process_cycle
+    
+    # Backup logs every 100 cycles
+    if (( cycle % 100 == 0 )); then
+        backup_logs
+    fi
+    
     sleep "$MONITOR_INTERVAL"
 done

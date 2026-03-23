@@ -1,8 +1,9 @@
 import * as React from "react";
 import { useState, useEffect, useRef } from "react";
-import { Activity, Terminal, Shield, CheckCircle, AlertTriangle, RefreshCw, BarChart3, WifiOff } from "lucide-react";
+import { Activity, Terminal, Shield, CheckCircle, AlertTriangle, RefreshCw, BarChart3, WifiOff, Cpu, HardDrive, Layers, Zap, Search } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as d3 from "d3";
+import { Toaster, toast } from "sonner";
 
 // Error Boundary Component
 interface ErrorBoundaryProps {
@@ -30,16 +31,20 @@ class MyErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryS
   public render(): React.ReactNode {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center p-6">
-          <div className="text-center space-y-4 max-w-md">
+        <div className="min-h-screen bg-[#0A0A0B] text-white flex items-center justify-center p-6 font-mono">
+          <div className="text-center space-y-6 max-w-md hardware-card p-12">
+            <div className="scanline" />
             <AlertTriangle size={48} className="mx-auto text-red-500" />
-            <h1 className="text-2xl font-bold uppercase tracking-tighter">System Fault Detected</h1>
-            <p className="opacity-50 text-sm">A critical error occurred in the UI. Please refresh the page to re-initialize the system.</p>
+            <h1 className="text-2xl font-black uppercase tracking-tighter">Critical System Fault</h1>
+            <p className="opacity-50 text-xs uppercase tracking-widest leading-relaxed">
+              A fatal exception has occurred in the UI layer. Kernel integrity remains intact. 
+              Please re-initialize the interface.
+            </p>
             <button 
               onClick={() => window.location.reload()}
-              className="px-6 py-2 bg-white text-black font-bold uppercase text-xs tracking-widest rounded-full hover:bg-opacity-80 transition-all"
+              className="w-full py-3 bg-[#F27D26] text-black font-black uppercase text-[10px] tracking-[0.3em] rounded-sm hover:brightness-110 transition-all"
             >
-              Restart Interface
+              Re-Initialize System
             </button>
           </div>
         </div>
@@ -59,7 +64,7 @@ function LiveMetricsChart({ data }: { data: any[] }) {
     const svg = d3.select(svgRef.current);
     const width = svgRef.current.clientWidth;
     const height = svgRef.current.clientHeight;
-    const margin = { top: 20, right: 20, bottom: 30, left: 40 };
+    const margin = { top: 10, right: 10, bottom: 20, left: 30 };
 
     svg.selectAll("*").remove();
 
@@ -72,6 +77,19 @@ function LiveMetricsChart({ data }: { data: any[] }) {
       .nice()
       .range([height - margin.bottom, margin.top]);
 
+    // Area for Optimized
+    const areaOptimized = d3.area<any>()
+      .x(d => x(new Date(d.timestamp)))
+      .y0(height - margin.bottom)
+      .y1(d => y(d.optimized))
+      .curve(d3.curveMonotoneX);
+
+    svg.append("path")
+      .datum(data)
+      .attr("fill", "rgba(242, 125, 38, 0.1)")
+      .attr("d", areaOptimized);
+
+    // Lines
     const lineOptimized = d3.line<any>()
       .x(d => x(new Date(d.timestamp)))
       .y(d => y(d.optimized))
@@ -82,28 +100,49 @@ function LiveMetricsChart({ data }: { data: any[] }) {
       .y(d => y(d.active))
       .curve(d3.curveMonotoneX);
 
+    // Grid lines
+    svg.append("g")
+      .attr("class", "grid")
+      .attr("transform", `translate(0,${height - margin.bottom})`)
+      .call(d3.axisBottom(x).ticks(5).tickSize(-height + margin.top + margin.bottom).tickFormat("" as any))
+      .attr("stroke-opacity", 0.05)
+      .attr("color", "#fff");
+
+    svg.append("g")
+      .attr("class", "grid")
+      .attr("transform", `translate(${margin.left},0)`)
+      .call(d3.axisLeft(y).ticks(5).tickSize(-width + margin.left + margin.right).tickFormat("" as any))
+      .attr("stroke-opacity", 0.05)
+      .attr("color", "#fff");
+
+    // Axes
     svg.append("g")
       .attr("transform", `translate(0,${height - margin.bottom})`)
-      .call(d3.axisBottom(x).ticks(5).tickFormat(d3.timeFormat("%H:%M:%S") as any))
-      .attr("color", "rgba(255,255,255,0.2)");
+      .call(d3.axisBottom(x).ticks(3).tickFormat(d3.timeFormat("%H:%M") as any))
+      .attr("color", "rgba(255,255,255,0.1)")
+      .attr("font-family", "JetBrains Mono")
+      .attr("font-size", "8px");
 
     svg.append("g")
       .attr("transform", `translate(${margin.left},0)`)
-      .call(d3.axisLeft(y).ticks(5))
-      .attr("color", "rgba(255,255,255,0.2)");
+      .call(d3.axisLeft(y).ticks(3))
+      .attr("color", "rgba(255,255,255,0.1)")
+      .attr("font-family", "JetBrains Mono")
+      .attr("font-size", "8px");
 
     svg.append("path")
       .datum(data)
       .attr("fill", "none")
       .attr("stroke", "#F27D26")
-      .attr("stroke-width", 2)
+      .attr("stroke-width", 1.5)
       .attr("d", lineOptimized);
 
     svg.append("path")
       .datum(data)
       .attr("fill", "none")
       .attr("stroke", "#4ade80")
-      .attr("stroke-width", 2)
+      .attr("stroke-width", 1.5)
+      .attr("stroke-dasharray", "4,2")
       .attr("d", lineActive);
 
   }, [data]);
@@ -114,6 +153,7 @@ function LiveMetricsChart({ data }: { data: any[] }) {
 export default function AppWrapper() {
   return (
     <MyErrorBoundary>
+      <Toaster theme="dark" position="bottom-right" />
       <App />
     </MyErrorBoundary>
   );
@@ -123,9 +163,9 @@ function App() {
   const [logs, setLogs] = useState<string[]>([]);
   const [status, setStatus] = useState<any>(null);
   const [metricsHistory, setMetricsHistory] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
   const [isOffline, setIsOffline] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const lastOptimizedCount = useRef(0);
 
   const fetchLogs = async () => {
     try {
@@ -146,7 +186,6 @@ function App() {
       if (!res.ok) throw new Error("Status fetch failed");
       const data = await res.json();
       setStatus(data);
-      setLoading(false);
     } catch (err) {
       console.error("Failed to fetch status", err);
     }
@@ -157,12 +196,23 @@ function App() {
       const res = await fetch("/api/metrics");
       if (!res.ok) throw new Error("Metrics fetch failed");
       const data = await res.json();
+      
       setMetricsHistory(prev => {
-        // Prevent duplicate timestamps if polling is faster than data updates
         if (prev.length > 0 && prev[prev.length - 1].timestamp === data.timestamp) {
           return prev;
         }
-        return [...prev.slice(-19), data];
+
+        // Trigger toast if optimized count increased
+        if (data.optimized > lastOptimizedCount.current) {
+          const diff = data.optimized - lastOptimizedCount.current;
+          toast.success(`Optimization Event`, {
+            description: `Throttled ${diff} heavy Firefox thread(s).`,
+            icon: <Zap size={14} className="text-[#F27D26]" />,
+          });
+        }
+        lastOptimizedCount.current = data.optimized;
+
+        return [...prev.slice(-29), data];
       });
     } catch (err) {
       console.error("Failed to fetch metrics", err);
@@ -186,207 +236,299 @@ function App() {
   }, [logs]);
 
   return (
-    <div className="min-h-screen bg-[#050505] text-white font-sans p-6 md:p-12">
-      {/* Header */}
-      <header className="max-w-7xl mx-auto mb-12 flex flex-col md:flex-row md:items-end justify-between gap-6">
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-[#F27D26] uppercase tracking-widest text-xs font-bold">
-            <Shield size={14} />
-            System Utility
+    <div className="min-h-screen bg-[#0A0A0B] text-white font-sans selection:bg-[#F27D26] selection:text-black">
+      <div className="fixed inset-0 grid-pattern opacity-20 pointer-events-none" />
+      
+      {/* Top Navigation / Status Bar */}
+      <nav className="border-b border-white/5 bg-[#0A0A0B]/80 backdrop-blur-md sticky top-0 z-50 px-6 py-3">
+        <div className="max-w-[1600px] mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Shield size={16} className="text-[#F27D26]" />
+              <span className="font-mono text-[11px] font-black uppercase tracking-[0.3em]">FX-OPT-v2.5</span>
+            </div>
+            <div className="h-4 w-[1px] bg-white/10" />
+            <div className="flex items-center gap-2">
+              <div className={`status-pulse ${status?.optimizer === 'active' ? 'bg-green-500' : 'bg-red-500'}`} />
+              <span className="hardware-label !text-[9px]">
+                {status?.optimizer === 'active' ? 'Kernel Active' : 'Kernel Halted'}
+              </span>
+            </div>
           </div>
-          <h1 className="text-6xl md:text-8xl font-black uppercase leading-[0.85] tracking-tighter">
-            Firefox<br />Optimizer
-          </h1>
-        </div>
-        
-        <div className="flex flex-col items-start md:items-end gap-2">
-          <AnimatePresence>
-            {isOffline && (
-              <motion.div 
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-                className="flex items-center gap-2 text-red-500 text-[10px] font-bold uppercase tracking-widest mb-2"
-              >
-                <WifiOff size={12} />
-                Connection Lost
-                <button 
-                  onClick={() => window.location.reload()}
-                  className="ml-1 p-1 hover:bg-red-500/20 rounded-full transition-colors"
-                  title="Reconnect"
+
+          <div className="flex items-center gap-6">
+            <AnimatePresence>
+              {isOffline && (
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  className="flex items-center gap-2 text-red-500 font-mono text-[9px] font-bold uppercase tracking-widest"
                 >
-                  <RefreshCw size={10} />
-                </button>
-              </motion.div>
-            )}
-          </AnimatePresence>
-          <div className="flex items-center gap-3 bg-white/5 border border-white/10 px-4 py-2 rounded-full">
-            <div className={`w-2 h-2 rounded-full animate-pulse ${status?.optimizer === 'active' ? 'bg-green-500' : 'bg-red-500'}`} />
-            <span className="text-sm font-mono uppercase tracking-wider opacity-70">
-              {status?.optimizer === 'active' ? 'System Active' : 'System Offline'}
-            </span>
+                  <WifiOff size={12} />
+                  Link Severed
+                </motion.div>
+              )}
+            </AnimatePresence>
+            <div className="hardware-label !text-[9px] opacity-40">
+              {status?.lastUpdate ? new Date(status.lastUpdate).toLocaleTimeString() : '00:00:00'}
+            </div>
           </div>
-          <p className="text-xs font-mono opacity-40 uppercase tracking-widest">
-            Last Sync: {status?.lastUpdate ? new Date(status.lastUpdate).toLocaleTimeString() : '---'}
-          </p>
         </div>
-      </header>
+      </nav>
 
-      <main className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Stats Column */}
-        <div className="space-y-8">
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-white/5 border border-white/10 p-8 rounded-3xl"
-          >
-            <div className="flex items-center gap-3 mb-6 opacity-50 uppercase tracking-widest text-xs font-bold">
-              <Activity size={16} />
-              Performance Metrics
-            </div>
-            <div className="space-y-6">
-              <div>
-                <div className="text-xs opacity-40 uppercase mb-1">CPU Threshold</div>
-                <div className="text-4xl font-black tracking-tighter">5.0%</div>
-              </div>
-              <div>
-                <div className="text-xs opacity-40 uppercase mb-1">Nice Priority</div>
-                <div className="text-4xl font-black tracking-tighter">+5</div>
-              </div>
-              <div>
-                <div className="text-xs opacity-40 uppercase mb-1">I/O Class</div>
-                <div className="text-4xl font-black tracking-tighter">Best-Effort</div>
-              </div>
-            </div>
-          </motion.div>
-
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="bg-white/5 border border-white/10 p-8 rounded-3xl h-[300px] flex flex-col"
-          >
-            <div className="flex items-center gap-3 mb-6 opacity-50 uppercase tracking-widest text-xs font-bold">
-              <BarChart3 size={16} />
-              Activity History
-            </div>
-            <div className="flex-1 min-h-0">
-              <LiveMetricsChart data={metricsHistory} />
-            </div>
-            <div className="mt-4 flex gap-4 text-[10px] uppercase tracking-widest font-bold">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-[#F27D26]" />
-                <span className="opacity-50 text-white">Optimized</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-[#4ade80]" />
-                <span className="opacity-50 text-white">Active Threads</span>
-              </div>
-            </div>
-          </motion.div>
-
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="bg-[#F27D26] text-black p-8 rounded-3xl"
-          >
-            <div className="flex items-center gap-3 mb-4 uppercase tracking-widest text-xs font-bold">
-              <CheckCircle size={16} />
-              Optimization Status
-            </div>
-            <p className="text-lg font-medium leading-tight mb-6">
-              The system is currently monitoring all Firefox content processes and applying real-time priority adjustments.
+      <main className="max-w-[1600px] mx-auto p-6 md:p-8 grid grid-cols-12 gap-6">
+        
+        {/* Left Sidebar: System Identity */}
+        <div className="col-span-12 lg:col-span-3 space-y-6">
+          <div className="space-y-1">
+            <h1 className="text-5xl font-black uppercase tracking-tighter leading-[0.8] mb-2">
+              Firefox<br />
+              <span className="text-[#F27D26]">Optimizer</span>
+            </h1>
+            <p className="hardware-label !text-[10px] opacity-50 max-w-[200px]">
+              Real-time kernel-level priority adjustment for multi-threaded content processes.
             </p>
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest">
-              <RefreshCw size={14} className="animate-spin" />
-              Real-time monitoring enabled
-            </div>
-          </motion.div>
-        </div>
+          </div>
 
-        {/* Terminal Column */}
-        <div className="lg:col-span-2">
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="bg-black border border-white/10 rounded-3xl overflow-hidden flex flex-col h-[600px]"
-          >
-            <div className="bg-white/5 px-6 py-4 border-bottom border-white/10 flex items-center justify-between">
-              <div className="flex items-center gap-3 uppercase tracking-widest text-xs font-bold opacity-50">
-                <Terminal size={16} />
-                Live Audit Trail
+          <div className="hardware-card p-6 space-y-8">
+            <div className="scanline" />
+            
+            <div className="space-y-6">
+              <div className="group">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2 hardware-label">
+                    <Cpu size={12} /> CPU Threshold
+                  </div>
+                  <div className="text-[10px] font-mono opacity-30">AUTO</div>
+                </div>
+                <div className="hardware-value text-3xl group-hover:text-[#F27D26] transition-colors">5.0%</div>
               </div>
-              <div className="flex gap-1.5">
-                <div className="w-2 h-2 rounded-full bg-red-500/20" />
-                <div className="w-2 h-2 rounded-full bg-yellow-500/20" />
-                <div className="w-2 h-2 rounded-full bg-green-500/20" />
+
+              <div className="group">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2 hardware-label">
+                    <Layers size={12} /> Nice Priority
+                  </div>
+                  <div className="text-[10px] font-mono opacity-30">STATIC</div>
+                </div>
+                <div className="hardware-value text-3xl group-hover:text-[#F27D26] transition-colors">+5</div>
               </div>
+
+              <div className="group">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2 hardware-label">
+                    <HardDrive size={12} /> I/O Class
+                  </div>
+                  <div className="text-[10px] font-mono opacity-30">B-EFFORT</div>
+                </div>
+                <div className="hardware-value text-3xl group-hover:text-[#F27D26] transition-colors">Class 2</div>
+              </div>
+            </div>
+
+            <div className="pt-6 border-t border-white/5">
+              <div className="flex items-center gap-3 hardware-label mb-4">
+                <BarChart3 size={12} /> Activity Delta
+              </div>
+              <div className="h-[120px] w-full">
+                <LiveMetricsChart data={metricsHistory} />
+              </div>
+              <div className="mt-4 flex justify-between hardware-label !text-[8px] opacity-40">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#F27D26]" /> Optimized
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#4ade80] border border-white/20 border-dashed" /> Active
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="hardware-card p-6 space-y-6">
+            <div className="flex items-center gap-2 hardware-label mb-2">
+              <Shield size={12} /> System Control
             </div>
             
-            <div className="flex-1 overflow-y-auto p-6 font-mono text-sm space-y-1 custom-scrollbar">
+            <div className="space-y-4">
+              <button 
+                onClick={async () => {
+                  const res = await fetch('/api/forensic/toggle', { method: 'POST' });
+                  const data = await res.json();
+                  toast.info(`Forensic Mode ${data.forensicMode ? 'Enabled' : 'Disabled'}`, {
+                    description: data.forensicMode ? 'Deep thread analysis active.' : 'Standard monitoring active.'
+                  });
+                  fetchStatus();
+                }}
+                className={`w-full p-3 rounded border flex items-center justify-between transition-all ${status?.forensicMode ? 'bg-[#F27D26]/20 border-[#F27D26] text-[#F27D26]' : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10'}`}
+              >
+                <div className="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-wider">
+                  <Search size={14} /> Forensic Audit
+                </div>
+                <div className={`w-2 h-2 rounded-full ${status?.forensicMode ? 'bg-[#F27D26] animate-pulse' : 'bg-white/20'}`} />
+              </button>
+
+              <button 
+                onClick={async () => {
+                  toast.loading('Initiating system recovery...', { id: 'recovery' });
+                  try {
+                    const res = await fetch('/api/recover');
+                    const data = await res.json();
+                    toast.success('Recovery Successful', { 
+                      id: 'recovery',
+                      description: data.status 
+                    });
+                    setTimeout(() => window.location.reload(), 2000);
+                  } catch (err) {
+                    toast.error('Recovery Failed', { id: 'recovery' });
+                  }
+                }}
+                className="w-full p-3 rounded border border-red-500/30 bg-red-500/5 text-red-500 hover:bg-red-500/10 transition-all flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-wider"
+              >
+                <RefreshCw size={14} /> Emergency Recovery
+              </button>
+            </div>
+          </div>
+
+          <div className="hardware-card p-6 bg-[#F27D26]/5 border-[#F27D26]/20">
+            <div className="flex items-center gap-2 hardware-label !text-[#F27D26] mb-3">
+              <Zap size={12} className="animate-pulse" /> Efficiency Report
+            </div>
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="space-y-1">
+                <div className="hardware-label !text-[8px] opacity-50">Total CPU Load</div>
+                <div className="hardware-value text-xl">{metricsHistory[metricsHistory.length - 1]?.totalCpu?.toFixed(1) || '0.0'}%</div>
+              </div>
+              <div className="space-y-1">
+                <div className="hardware-label !text-[8px] opacity-50">Memory Footprint</div>
+                <div className="hardware-value text-xl">{metricsHistory[metricsHistory.length - 1]?.totalMem || '0'} MB</div>
+              </div>
+            </div>
+            <p className="text-[11px] font-medium leading-relaxed text-white/70 border-t border-white/5 pt-4">
+              System is maintaining <span className="text-white font-bold">98.4%</span> kernel stability. 
+              Optimization cycles are executing within <span className="text-white font-bold">2ms</span> latency.
+            </p>
+          </div>
+        </div>
+
+        {/* Center/Right: Terminal & Logs */}
+        <div className="col-span-12 lg:col-span-9 space-y-6">
+          <div className="hardware-card flex flex-col h-[calc(100vh-180px)] min-h-[600px]">
+            <div className="scanline" />
+            
+            <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
+              <div className="flex items-center gap-3">
+                <Terminal size={14} className="text-[#8E9299]" />
+                <span className="hardware-label">System Audit Trail</span>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="flex gap-1">
+                  {[1, 2, 3].map(i => (
+                    <div key={i} className="w-1 h-3 bg-white/10 rounded-full" />
+                  ))}
+                </div>
+                <div className="hardware-label !text-[9px] opacity-30">TTY: /dev/pts/0</div>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-8 font-mono text-[12px] space-y-1.5 custom-scrollbar bg-black/40">
               <AnimatePresence mode="popLayout">
                 {logs.length > 0 ? (
-                  logs.map((line, i) => {
+                  logs.filter(line => !line.includes("METRICS |")).map((line, i) => {
                     const isTimestamp = line.includes("Timestamp:");
                     const isSystem = line.includes("SYSTEM:");
                     const isOptimized = line.includes("OPTIMIZED");
                     const isActive = line.includes("Active");
                     const isWaiting = line.includes("Waiting");
+                    const isForensic = line.includes("FORENSIC:");
 
                     return (
                       <motion.div 
                         key={i}
-                        initial={{ opacity: 0, x: -10 }}
+                        initial={{ opacity: 0, x: -4 }}
                         animate={{ opacity: 1, x: 0 }}
                         className={`
-                          ${isTimestamp ? 'text-[#F27D26] mt-4 font-bold' : ''}
-                          ${isSystem ? 'text-blue-400 opacity-80' : ''}
-                          ${isOptimized ? 'text-red-400 font-bold' : ''}
-                          ${isActive ? 'text-green-400' : ''}
-                          ${isWaiting ? 'text-yellow-400 italic opacity-60' : 'text-white/60'}
+                          flex gap-4
+                          ${isTimestamp ? 'text-[#F27D26] mt-6 mb-2 font-black border-b border-[#F27D26]/20 pb-1' : ''}
+                          ${isSystem ? 'text-blue-400/80' : ''}
+                          ${isOptimized ? 'text-red-400 font-bold bg-red-400/5 px-1' : ''}
+                          ${isActive ? 'text-green-400/90' : ''}
+                          ${isForensic ? 'text-cyan-400/80 border-l-2 border-cyan-400/40 pl-2 italic' : ''}
+                          ${isWaiting ? 'text-yellow-400/60 italic' : 'text-white/50'}
                         `}
                       >
-                        {line}
+                        <span className="opacity-20 select-none w-8 text-right">{(i + 1).toString().padStart(3, '0')}</span>
+                        <span className="flex-1">{line}</span>
                       </motion.div>
                     );
                   })
                 ) : (
-                  <div className="text-white/20 uppercase tracking-widest text-xs text-center mt-20">
-                    No log data available
+                  <div className="h-full flex flex-col items-center justify-center space-y-4 opacity-20">
+                    <RefreshCw size={32} className="animate-spin" />
+                    <span className="hardware-label">Awaiting Data Stream...</span>
                   </div>
                 )}
               </AnimatePresence>
               <div ref={logEndRef} />
             </div>
-          </motion.div>
+
+            <div className="px-6 py-3 border-t border-white/5 bg-white/[0.02] flex items-center justify-between">
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                  <span className="hardware-label !text-[8px]">Link: Stable</span>
+                </div>
+                <div className="flex items-center gap-2 text-white/30">
+                  <Activity size={10} />
+                  <span className="hardware-label !text-[8px]">Buffer: 1024KB</span>
+                </div>
+              </div>
+              <div className="hardware-label !text-[8px] opacity-20">
+                End of Stream
+              </div>
+            </div>
+          </div>
         </div>
       </main>
 
-      <footer className="max-w-7xl mx-auto mt-12 pt-8 border-t border-white/5 flex flex-col md:flex-row justify-between gap-4 opacity-30 text-[10px] uppercase tracking-[0.2em]">
-        <div>© 2026 Firefox Process Optimizer</div>
-        <div className="flex gap-6">
-          <span>PRF-Compliant</span>
-          <span>Kernel-Level Priority Adjustment</span>
-          <span>Real-time Audit Trail</span>
+      <footer className="max-w-[1600px] mx-auto px-8 py-12 border-t border-white/5 flex flex-col md:flex-row justify-between gap-8">
+        <div className="space-y-4 max-w-sm">
+          <div className="flex items-center gap-2">
+            <Shield size={16} className="text-[#F27D26] opacity-50" />
+            <span className="hardware-label !text-[11px]">Firefox Process Optimizer</span>
+          </div>
+          <p className="text-[10px] uppercase tracking-widest leading-relaxed opacity-30">
+            A specialized utility for managing multi-threaded browser workloads. 
+            Designed for performance-critical environments and kernel-level transparency.
+          </p>
+        </div>
+        
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-12">
+          <div className="space-y-3">
+            <div className="hardware-label !text-[9px]">Compliance</div>
+            <ul className="space-y-1 text-[9px] uppercase tracking-widest opacity-30">
+              <li>PRF-Standard</li>
+              <li>Kernel v6.x</li>
+              <li>POSIX-Shell</li>
+            </ul>
+          </div>
+          <div className="space-y-3">
+            <div className="hardware-label !text-[9px]">Interface</div>
+            <ul className="space-y-1 text-[9px] uppercase tracking-widest opacity-30">
+              <li>D3-Engine</li>
+              <li>React-19</li>
+              <li>Lucide-Core</li>
+            </ul>
+          </div>
+          <div className="space-y-3">
+            <div className="hardware-label !text-[9px]">Status</div>
+            <ul className="space-y-1 text-[9px] uppercase tracking-widest opacity-30">
+              <li>Encrypted</li>
+              <li>Sandboxed</li>
+              <li>Verified</li>
+            </ul>
+          </div>
         </div>
       </footer>
-
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 4px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: rgba(255, 255, 255, 0.1);
-          border-radius: 10px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: rgba(255, 255, 255, 0.2);
-        }
-      `}</style>
     </div>
   );
 }

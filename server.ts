@@ -11,6 +11,7 @@ const __dirname = path.dirname(__filename);
 const CONFIG = {
   PORT: 3000,
   LOG_FILE: "active_threads.log",
+  LOCK_FILE: "firefox_opt.lock",
   OPTIMIZER_SCRIPT: "firefox_content_opt.sh",
   MAX_LOG_LINES: 100,
   METRICS_WINDOW: 500,
@@ -50,15 +51,19 @@ async function startServer() {
   const app = express();
   let optimizerProcess: ChildProcess | null = null;
 
-  // Fail-fast: Check if optimizer script exists
-  const optimizerPath = path.join(process.cwd(), CONFIG.OPTIMIZER_SCRIPT);
-  if (!fs.existsSync(optimizerPath)) {
-    console.error(`CRITICAL: Optimizer script not found at ${optimizerPath}`);
-  } else {
+  function startOptimizer() {
+    const optimizerPath = path.join(process.cwd(), CONFIG.OPTIMIZER_SCRIPT);
+    if (!fs.existsSync(optimizerPath)) {
+      console.error(`CRITICAL: Optimizer script not found at ${optimizerPath}`);
+      return;
+    }
+
     try {
       fs.chmodSync(optimizerPath, '755');
-      console.log("Starting Firefox Content Optimizer...");
-      optimizerProcess = spawn("bash", [optimizerPath]);
+      console.log(`Starting Firefox Content Optimizer (Forensic: ${process.env.FORENSIC_MODE || 'false'})...`);
+      
+      const env = { ...process.env };
+      optimizerProcess = spawn("bash", [optimizerPath], { env });
 
       optimizerProcess.stdout?.on("data", (data) => {
         console.log(`[Optimizer] ${data.toString().trim()}`);
@@ -77,6 +82,9 @@ async function startServer() {
     }
   }
 
+  // Initial start
+  startOptimizer();
+
   // API: Get latest logs
   app.get("/api/logs", (req, res) => {
     const logPath = path.join(process.cwd(), CONFIG.LOG_FILE);
@@ -94,8 +102,48 @@ async function startServer() {
     res.json({
       status: "running",
       optimizer: optimizerProcess ? "active" : "failed",
+      forensicMode: process.env.FORENSIC_MODE === "true",
       lastUpdate: new Date().toISOString(),
     });
+  });
+
+  // API: System Recovery
+  app.get("/api/recover", async (req, res) => {
+    console.log("SYSTEM: Initiating recovery sequence...");
+    
+    if (optimizerProcess) {
+      optimizerProcess.kill();
+      optimizerProcess = null;
+    }
+
+    try {
+      const lockPath = path.join(process.cwd(), CONFIG.LOCK_FILE);
+      if (fs.existsSync(lockPath)) {
+        fs.unlinkSync(lockPath);
+      }
+      spawn("pkill", ["-f", CONFIG.OPTIMIZER_SCRIPT]);
+    } catch (err) {
+      console.warn("Recovery: Cleanup warning:", err);
+    }
+
+    setTimeout(() => {
+      startOptimizer();
+      res.json({ status: "Recovery sequence completed. System restarting..." });
+    }, 1000);
+  });
+
+  // API: Toggle Forensic Mode
+  app.post("/api/forensic/toggle", (req, res) => {
+    const current = process.env.FORENSIC_MODE === "true";
+    process.env.FORENSIC_MODE = (!current).toString();
+    
+    if (optimizerProcess) {
+      optimizerProcess.kill();
+      optimizerProcess = null;
+      setTimeout(startOptimizer, 500);
+    }
+
+    res.json({ forensicMode: !current });
   });
 
   // API: Get metrics for D3 visualization
@@ -103,14 +151,38 @@ async function startServer() {
     const logPath = path.join(process.cwd(), CONFIG.LOG_FILE);
     const recentLines = readLastLines(logPath, CONFIG.METRICS_WINDOW);
     
-    const optimizedCount = recentLines.filter(l => l.includes("OPTIMIZED")).length;
-    const activeCount = recentLines.filter(l => l.includes("Active")).length;
-    const cycles = recentLines.filter(l => l.includes("Timestamp:")).length;
+    let optimizedCount = 0;
+    let activeCount = 0;
+    let totalCpu = 0;
+    let totalMem = 0;
+    let lastMetricsLine = "";
+
+    // Find the most recent METRICS line
+    for (let i = recentLines.length - 1; i >= 0; i--) {
+      if (recentLines[i].includes("METRICS |")) {
+        lastMetricsLine = recentLines[i];
+        break;
+      }
+    }
+
+    if (lastMetricsLine) {
+      // Parse: METRICS | Active: 10 | Optimized: 2 | TotalCPU: 15.5 | TotalMem: 2048 MB
+      const parts = lastMetricsLine.split("|").map(p => p.trim());
+      activeCount = parseInt(parts[1]?.split(":")[1]) || 0;
+      optimizedCount = parseInt(parts[2]?.split(":")[1]) || 0;
+      totalCpu = parseFloat(parts[3]?.split(":")[1]) || 0;
+      totalMem = parseInt(parts[4]?.split(":")[1]) || 0;
+    } else {
+      // Fallback to legacy parsing if METRICS line isn't found yet
+      optimizedCount = recentLines.filter(l => l.includes("OPTIMIZED")).length;
+      activeCount = recentLines.filter(l => l.includes("Active")).length;
+    }
 
     res.json({
       optimized: optimizedCount,
       active: activeCount,
-      cycles,
+      totalCpu,
+      totalMem,
       timestamp: new Date().toISOString()
     });
   });
