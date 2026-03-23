@@ -1,7 +1,53 @@
+import * as React from "react";
 import { useState, useEffect, useRef } from "react";
-import { Activity, Terminal, Shield, CheckCircle, AlertTriangle, RefreshCw, BarChart3 } from "lucide-react";
+import { Activity, Terminal, Shield, CheckCircle, AlertTriangle, RefreshCw, BarChart3, WifiOff } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as d3 from "d3";
+
+// Error Boundary Component
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+}
+
+class MyErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  public props: ErrorBoundaryProps;
+  public state: ErrorBoundaryState;
+
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.props = props;
+    this.state = { hasError: false };
+  }
+
+  public static getDerivedStateFromError(): ErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  public render(): React.ReactNode {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center p-6">
+          <div className="text-center space-y-4 max-w-md">
+            <AlertTriangle size={48} className="mx-auto text-red-500" />
+            <h1 className="text-2xl font-bold uppercase tracking-tighter">System Fault Detected</h1>
+            <p className="opacity-50 text-sm">A critical error occurred in the UI. Please refresh the page to re-initialize the system.</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="px-6 py-2 bg-white text-black font-bold uppercase text-xs tracking-widest rounded-full hover:bg-opacity-80 transition-all"
+            >
+              Restart Interface
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // D3 Chart Component
 function LiveMetricsChart({ data }: { data: any[] }) {
@@ -65,26 +111,39 @@ function LiveMetricsChart({ data }: { data: any[] }) {
   return <svg ref={svgRef} className="w-full h-full" />;
 }
 
-export default function App() {
+export default function AppWrapper() {
+  return (
+    <MyErrorBoundary>
+      <App />
+    </MyErrorBoundary>
+  );
+}
+
+function App() {
   const [logs, setLogs] = useState<string[]>([]);
   const [status, setStatus] = useState<any>(null);
   const [metricsHistory, setMetricsHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isOffline, setIsOffline] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const fetchLogs = async () => {
     try {
       const res = await fetch("/api/logs");
+      if (!res.ok) throw new Error("Log fetch failed");
       const data = await res.json();
       setLogs(data.lines);
+      setIsOffline(false);
     } catch (err) {
       console.error("Failed to fetch logs", err);
+      setIsOffline(true);
     }
   };
 
   const fetchStatus = async () => {
     try {
       const res = await fetch("/api/status");
+      if (!res.ok) throw new Error("Status fetch failed");
       const data = await res.json();
       setStatus(data);
       setLoading(false);
@@ -96,8 +155,15 @@ export default function App() {
   const fetchMetrics = async () => {
     try {
       const res = await fetch("/api/metrics");
+      if (!res.ok) throw new Error("Metrics fetch failed");
       const data = await res.json();
-      setMetricsHistory(prev => [...prev.slice(-19), data]);
+      setMetricsHistory(prev => {
+        // Prevent duplicate timestamps if polling is faster than data updates
+        if (prev.length > 0 && prev[prev.length - 1].timestamp === data.timestamp) {
+          return prev;
+        }
+        return [...prev.slice(-19), data];
+      });
     } catch (err) {
       console.error("Failed to fetch metrics", err);
     }
@@ -134,6 +200,26 @@ export default function App() {
         </div>
         
         <div className="flex flex-col items-start md:items-end gap-2">
+          <AnimatePresence>
+            {isOffline && (
+              <motion.div 
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+                className="flex items-center gap-2 text-red-500 text-[10px] font-bold uppercase tracking-widest mb-2"
+              >
+                <WifiOff size={12} />
+                Connection Lost
+                <button 
+                  onClick={() => window.location.reload()}
+                  className="ml-1 p-1 hover:bg-red-500/20 rounded-full transition-colors"
+                  title="Reconnect"
+                >
+                  <RefreshCw size={10} />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
           <div className="flex items-center gap-3 bg-white/5 border border-white/10 px-4 py-2 rounded-full">
             <div className={`w-2 h-2 rounded-full animate-pulse ${status?.optimizer === 'active' ? 'bg-green-500' : 'bg-red-500'}`} />
             <span className="text-sm font-mono uppercase tracking-wider opacity-70">

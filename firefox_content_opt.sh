@@ -21,6 +21,7 @@ set -euo pipefail
 # -----------------------------
 # Use absolute paths where possible or ensure relative paths are safe
 OUTPUT_FILE="./active_threads.log"
+LOCK_FILE="./optimizer.lock"
 MAX_LOG_SIZE_KB=1024            # Rotate log after 1MB
 MIN_CPU=0.1                     # Threshold for "active" (0.1% CPU)
 RENICE_VAL=5                    # Lower priority (higher nice value)
@@ -190,6 +191,9 @@ cleanup() {
         kill "$SUDO_REFRESH_PID" 2>/dev/null || true
     fi
 
+    # Remove lockfile
+    rm -f "$LOCK_FILE"
+
     printf "\n${BLUE}Shutting down Firefox Process Optimizer...${NC}\n"
     # We don't call log_msg here to avoid potential issues if log_msg fails
     printf "%s | Optimizer stopped by user.\n" "$(date '+%F %T')" >> "$OUTPUT_FILE"
@@ -338,6 +342,19 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# Lockfile check
+if [[ -f "$LOCK_FILE" ]]; then
+    PID=$(cat "$LOCK_FILE")
+    if kill -0 "$PID" 2>/dev/null; then
+        printf "${RED}ERROR: Optimizer is already running (PID: %s). Exiting.${NC}\n" "$PID"
+        exit 1
+    fi
+fi
+echo "$$" > "$LOCK_FILE"
+
+# Ensure the lockfile is removed on exit
+trap 'rm -f "$LOCK_FILE"; cleanup' EXIT SIGINT SIGTERM
 
 # Initialize
 check_dependencies
