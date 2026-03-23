@@ -1,0 +1,5 @@
+{
+  "name": "Firefox Process Optimizer",
+  "description": "A system utility to monitor, log, and optimize Firefox content processes by dynamically adjusting CPU and I/O priorities.",
+  "requestFramePermissions": []
+}
