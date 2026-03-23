@@ -8,12 +8,14 @@ This project emerged from a series of failed attempts to create a reliable, non-
 4. **Passive Monitoring:** Scripts would report data but fail to actually apply optimizations like `renice` or `ionice`.
 
 ## Where We Are
-We now have a robust, PRF-compliant Bash utility (`firefox_content_opt_v2.sh`) that:
+We now have a robust, PRF-compliant Bash utility (`firefox_content_opt_v3.sh`) that:
 - **Captures Live Data:** Actively queries the system for Firefox threads using `ps -eL`.
 - **Filters Noise:** Automatically ignores idle threads (0% CPU) to focus on performance hotspots.
-- **Provides Evidence:** Displays real-time troubleshooting data (PID, TID, CPU%, MEM) to the terminal while simultaneously logging to `active_threads.log`.
-- **Actively Optimizes:** Dynamically adjusts CPU priority (`renice`) and I/O priority (`ionice`) for heavy threads to maintain system responsiveness.
+- **Provides Evidence:** Displays real-time troubleshooting data (PID, TID, CPU%, MEM) to the terminal with **color-coded status** (Green for active, Red for optimized, Yellow for permission issues).
+- **Actively Optimizes:** Dynamically adjusts CPU priority (`renice`) and I/O priority (`ionice`) for heavy threads.
+- **Efficacy Reporting:** Tracks and reports the number of successful optimizations per cycle.
 - **Contextual Awareness:** Includes system-wide troubleshooting data (Load Average, Memory Pressure) in every cycle.
+- **Safety Features:** Includes dependency checks and graceful shutdown (`Ctrl+C`) handling.
 
 ## How to Use the Repo
 
@@ -21,14 +23,14 @@ We now have a robust, PRF-compliant Bash utility (`firefox_content_opt_v2.sh`) t
 Ensure you are running on a Linux-based system with `ps`, `awk`, `renice`, and `ionice` installed.
 
 ### 2. Running the Optimizer
-You can run the script directly using `bash`:
+You can run the latest version (`v3`) directly using `bash`:
 ```bash
-bash firefox_content_opt_v2.sh
+bash firefox_content_opt_v3.sh
 ```
 
 ### 3. Monitoring Output
-- **Terminal:** You will see a live feed of active Firefox threads and system health.
-- **Logs:** A persistent audit trail is maintained in `./active_threads.log`.
+- **Terminal:** A colorized live feed showing active threads and optimization events.
+- **Logs:** A clean, ANSI-stripped audit trail is maintained in `./active_threads.log`.
 
 ### 4. Customization
 You can edit the variables at the top of `firefox_content_opt_v2.sh` to adjust:
