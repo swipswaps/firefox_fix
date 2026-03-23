@@ -58,11 +58,20 @@ async function startServer() {
     try {
       fs.chmodSync(optimizerPath, '755');
       console.log("Starting Firefox Content Optimizer...");
-      optimizerProcess = spawn("bash", [optimizerPath], {
-      detached: true,
-      stdio: "ignore",
-    });
-    optimizerProcess.unref();
+      optimizerProcess = spawn("bash", [optimizerPath]);
+
+      optimizerProcess.stdout?.on("data", (data) => {
+        console.log(`[Optimizer] ${data.toString().trim()}`);
+      });
+
+      optimizerProcess.stderr?.on("data", (data) => {
+        console.error(`[Optimizer Error] ${data.toString().trim()}`);
+      });
+
+      optimizerProcess.on("exit", (code) => {
+        console.log(`Optimizer process exited with code ${code}`);
+        optimizerProcess = null;
+      });
     } catch (err) {
       console.error(`CRITICAL: Failed to set permissions or spawn optimizer:`, err);
     }

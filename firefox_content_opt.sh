@@ -73,6 +73,10 @@ assert() {
 # Check if sudo is available and functional
 # Best Practice: Use -n (non-interactive) to avoid hanging
 has_sudo() {
+    # If already root, we don't need sudo
+    if [[ "$EUID" -eq 0 ]]; then
+        return 1
+    fi
     command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1
 }
 
@@ -85,7 +89,7 @@ init_sudo() {
 
     printf "${BLUE}Requesting administrative privileges for process optimization...${NC}\n"
     # Prompt for password once
-    if sudo -v; then
+    if sudo -n -v 2>/dev/null; then
         # Keep-alive sudo in background subshell
         # Best Practice: Use a loop that exits if the parent process dies
         (
@@ -264,7 +268,9 @@ process_cycle() {
                         color="$YELLOW"
                     else
                         local prefix=""
-                        [[ "$use_sudo" == "true" ]] && prefix="sudo "
+                        if [[ "$EUID" -ne 0 ]]; then
+                            [[ "$use_sudo" == "true" ]] && prefix="sudo "
+                        fi
                         
                         # Best Practice: Execute and check return codes explicitly
                         local err_msg
@@ -354,14 +360,12 @@ fi
 echo "$$" > "$LOCK_FILE"
 
 # Ensure the lockfile is removed on exit
-trap 'rm -f "$LOCK_FILE"; cleanup' EXIT SIGINT SIGTERM
+trap 'cleanup' EXIT SIGINT SIGTERM
 
 # Initialize
 check_dependencies
 init_sudo
 
-# Clear screen for fresh start
-clear
 log_msg "Starting Firefox Content Optimizer (Best Practices Mode)" "$BLUE"
 [[ "$DRY_RUN" == "true" ]] && printf "${YELLOW}WARNING: DRY_RUN enabled. No optimizations will be applied.${NC}\n"
 
