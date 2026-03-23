@@ -27,33 +27,32 @@ log_msg() {
 
 # Fetch and optimize active threads
 process_cycle() {
-    local ts
+    local ts load mem_info
     ts=$(date '+%Y-%m-%d %H:%M:%S')
+    load=$(uptime | awk -F'load average:' '{ print $2 }' | sed 's/^ //')
+    mem_info=$(free -m | awk '/Mem:/ { printf "Used: %dMB / Total: %dMB (%.1f%%)", $3, $2, $3*100/$2 }')
+
+    echo "----------------------------------------------------------------" | tee -a "$OUTPUT_FILE"
     echo "$TIMESTAMP_PREFIX $ts" | tee -a "$OUTPUT_FILE"
+    echo "TROUBLESHOOTING: Load Avg: $load | Mem: $mem_info" | tee -a "$OUTPUT_FILE"
+    echo "----------------------------------------------------------------" | tee -a "$OUTPUT_FILE"
 
     # Use ps -eL to get all threads. 
-    # -o pid,tid,pcpu,rss,comm is the custom output format.
-    # We grep for firefox to target only relevant processes.
-    # awk handles filtering and formatting.
+    # We grep for "-contentproc" to target only Firefox content processes specifically.
     
-    ps -eL -o pid,tid,pcpu,rss,comm --no-headers | grep -i "firefox" | awk -v min_cpu="$MIN_CPU" -v renice_v="$RENICE_VAL" -v ionice_c="$IONICE_CLASS" -v ionice_p="$IONICE_PRIO" '
+    ps -eL -o pid,tid,pcpu,rss,args --no-headers | grep "\-contentproc" | awk -v min_cpu="$MIN_CPU" -v renice_v="$RENICE_VAL" -v ionice_c="$IONICE_CLASS" -v ionice_p="$IONICE_PRIO" '
     {
         pid = $1
         tid = $2
         cpu = $3
         rss = $4
-        comm = $5
         
         # Convert CPU to numeric for comparison
         cpu_val = cpu + 0
         
         if (cpu_val >= min_cpu) {
             mem_mb = int(rss / 1024)
-            printf "PID %s TID %s | CPU %s%% | MEM %d MB | %s\n", pid, tid, cpu, mem_mb, comm
-            
-            # We use system() to run optimization commands from within awk
-            # renice -n <val> -p <tid>
-            # ionice -c <class> -n <prio> -p <tid>
+            printf "PID %s TID %s | CPU %s%% | MEM %d MB | Active Content Thread\n", pid, tid, cpu, mem_mb
             
             # Only optimize if CPU is significantly high (e.g. > 5%)
             if (cpu_val > 5.0) {
