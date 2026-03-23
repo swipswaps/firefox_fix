@@ -17,12 +17,17 @@ We now have a robust, PRF-compliant Bash utility (`firefox_content_opt.sh`) that
 - **Contextual Awareness:** Includes system-wide troubleshooting data (Load Average, Memory Pressure) in every cycle.
 - **Safety Features:** Includes **automatic dependency management**, grouped redirects for efficiency, and a **Dry Run / Test mode**.
 - **Full Transparency:** Uses `tee` to provide live log data for troubleshooting and full transparency.
-- **Self-Testing Logic:** Includes an internal `assert` helper and a `--self-test` suite that verifies every major code block (logging, dependency checks, and process parsing).
+- **Self-Testing Logic:** Includes an internal `assert` helper and a `--self-test` suite that verifies every major code block.
+- **Resilience Mode:**
+    - **OS Guard:** Automatically detects and blocks execution on non-Linux environments (with WSL2 guidance).
+    - **Sudo Management:** Prompts for administrative privileges once at startup and maintains them in the background to prevent "Perm Denied" failures during long-running sessions.
+    - **Enhanced Dependency Recovery:** Provides explicit package names for manual installation if automated setup fails.
+    - **Dynamic UX:** Gracefully waits for Firefox processes to appear rather than reporting a "failure" state.
 
 ## How to Use the Repo
 
 ### 1. Running the Optimizer
-The script now handles its own dependencies. You can run the utility directly using `bash`:
+The script now handles its own dependencies and administrative privileges. You can run the utility directly using `bash`:
 ```bash
 bash firefox_content_opt.sh
 ```

@@ -32,6 +32,15 @@ NC='\033[0m' # No Color
 ANSI_STRIP="s/\x1b\[[0-9;]*m//g"
 
 # -----------------------------
+# OS CHECK (Fix for "Non-Linux Environments")
+# -----------------------------
+if [[ "$(uname)" != "Linux" ]]; then
+    echo -e "${RED}ERROR: This script requires a Linux environment (kernel features like /proc and ionice are required).${NC}"
+    echo -e "${YELLOW}If you are on Windows, please run this inside WSL2 (Windows Subsystem for Linux).${NC}"
+    exit 1
+fi
+
+# -----------------------------
 # FUNCTIONS
 # -----------------------------
 
@@ -48,6 +57,25 @@ assert() {
 # Check if sudo is available and functional
 has_sudo() {
     command -v sudo &> /dev/null && sudo -n true &> /dev/null
+}
+
+# Sudo Refresher (Fix for "Permission Constraints")
+# Prompts for sudo once and keeps it alive in the background
+init_sudo() {
+    if [[ "$DRY_RUN" == "true" || "$SELF_TEST_MODE" == "true" ]]; then
+        return
+    fi
+
+    echo -e "${BLUE}Requesting administrative privileges for process optimization...${NC}"
+    if sudo -v; then
+        # Keep-alive sudo in background
+        (while true; do sudo -n v; sleep 60; done) &
+        SUDO_PID=$!
+        trap 'kill $SUDO_PID 2>/dev/null || true; cleanup' EXIT SIGINT SIGTERM
+        echo -e "${GREEN}Sudo privileges acquired and kept alive.${NC}"
+    else
+        echo -e "${YELLOW}WARNING: Sudo privileges not acquired. Optimizations may fail with 'Perm Denied'.${NC}"
+    fi
 }
 
 # Dependency management: Check and install missing tools
@@ -86,7 +114,13 @@ check_dependencies() {
                 done
             fi
         else
-            echo -e "${RED}ERROR: Missing tools and sudo not available. Please install manually: ${missing[*]}${NC}"
+            # Fix for "Missing Dependencies" (Enhanced manual instructions)
+            echo -e "${RED}ERROR: Missing tools and sudo not available.${NC}"
+            echo -e "${BLUE}Please install the following packages manually using your package manager:${NC}"
+            echo -e "  - procps (for ps, free, uptime)"
+            echo -e "  - bsdutils (for renice)"
+            echo -e "  - util-linux (for ionice)"
+            echo -e "  - coreutils/sed/grep/gawk"
             exit 1
         fi
         
@@ -120,8 +154,6 @@ cleanup() {
     log_msg "Optimizer stopped by user."
     exit 0
 }
-
-trap cleanup SIGINT SIGTERM
 
 process_cycle() {
     local ts load mem_info
@@ -209,7 +241,8 @@ process_cycle() {
             fi
         done
     else
-        echo -e "${YELLOW}No active Firefox content processes found.${NC}"
+        # Fix for "Firefox Not Running" (Better UX)
+        echo -e "${YELLOW}Waiting for Firefox content processes... (None active currently)${NC}"
     fi
 
     if [[ $opt_count -gt 0 ]]; then
@@ -263,9 +296,10 @@ for arg in "$@"; do
 done
 
 check_dependencies
+init_sudo
 
 clear
-log_msg "Starting Firefox Content Optimizer (Self-Testing Enabled)" "$BLUE"
+log_msg "Starting Firefox Content Optimizer (Resilience Mode Enabled)" "$BLUE"
 [[ "$DRY_RUN" == "true" ]] && echo -e "${YELLOW}WARNING: DRY_RUN enabled. No optimizations will be applied.${NC}"
 
 touch "$OUTPUT_FILE"
