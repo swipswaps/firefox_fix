@@ -66,6 +66,7 @@ async function startServer() {
   app.use(cookieParser(process.env.AUTH_SECRET || "fx-opt-secret-default"));
   app.use(express.json());
   let optimizerProcess: ChildProcess | null = null;
+  let lastOptimizerError: string | null = null;
 
   // Auth Middleware
   const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -125,6 +126,7 @@ async function startServer() {
       optimizerProcess.stderr?.on("data", (data) => {
         const errorMsg = data.toString().trim();
         console.error(`[Optimizer Error] ${errorMsg}`);
+        lastOptimizerError = errorMsg;
         // Log critical errors to the audit trail so the user can see them in the UI
         fs.appendFileSync(
           path.join(process.cwd(), CONFIG.LOG_FILE),
@@ -134,6 +136,9 @@ async function startServer() {
 
       optimizerProcess.on("exit", (code) => {
         console.log(`Optimizer process exited with code ${code}`);
+        if (code !== 0 && code !== null) {
+          lastOptimizerError = `Process exited with code ${code}`;
+        }
         optimizerProcess = null;
         // If it crashed (non-zero), log it to the audit trail
         if (code !== 0 && code !== null) {
@@ -193,6 +198,7 @@ async function startServer() {
     res.json({
       status: "running",
       optimizer: optimizerProcess ? "active" : "failed",
+      lastError: lastOptimizerError,
       forensicMode: process.env.FORENSIC_MODE === "true",
       sudoStatus,
       config: runtimeConfig,
@@ -244,6 +250,7 @@ async function startServer() {
       optimizerProcess.kill();
       optimizerProcess = null;
     }
+    lastOptimizerError = null;
 
     try {
       const lockPath = path.join(process.cwd(), CONFIG.LOCK_FILE);

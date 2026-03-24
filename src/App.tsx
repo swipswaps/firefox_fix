@@ -460,12 +460,19 @@ function App() {
                 </span>
               </div>
               {status?.optimizer !== 'active' && (
-                <button 
-                  onClick={() => document.getElementById('recovery-btn')?.click()}
-                  className="text-[8px] text-red-500/60 hover:text-red-500 underline uppercase tracking-widest font-bold ml-4"
-                >
-                  Initiate Recovery
-                </button>
+                <div className="flex flex-col ml-4">
+                  {status?.lastError && (
+                    <span className="text-[8px] text-red-500 font-mono uppercase tracking-widest animate-pulse">
+                      Error: {status.lastError}
+                    </span>
+                  )}
+                  <button 
+                    onClick={() => document.getElementById('recovery-btn')?.click()}
+                    className="text-[8px] text-red-500/60 hover:text-red-500 underline uppercase tracking-widest font-bold text-left"
+                  >
+                    Initiate Recovery
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -739,6 +746,7 @@ function App() {
                     logs.filter(line => !line.includes("METRICS |") && !line.includes("THREAD |")).map((line, i) => {
                       const isTimestamp = line.includes("Timestamp:");
                       const isSystem = line.includes("SYSTEM:");
+                      const isSystemError = line.includes("SYSTEM ERROR:");
                       const isOptimized = line.includes("OPTIMIZED");
                       const isActive = line.includes("Active");
                       const isWaiting = line.includes("Waiting");
@@ -753,6 +761,7 @@ function App() {
                             flex gap-4
                             ${isTimestamp ? 'text-[#F27D26] mt-6 mb-2 font-black border-b border-[#F27D26]/20 pb-1' : ''}
                             ${isSystem ? 'text-blue-400/80' : ''}
+                            ${isSystemError ? 'text-red-500 font-black bg-red-500/10 px-2 py-1 border border-red-500/20' : ''}
                             ${isOptimized ? 'text-red-400 font-bold bg-red-400/5 px-1' : ''}
                             ${isActive ? 'text-green-400/90' : ''}
                             ${isForensic ? 'text-cyan-400/80 border-l-2 border-cyan-400/40 pl-2 italic' : ''}
