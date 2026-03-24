@@ -3,8 +3,9 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
-import { spawn, execSync, ChildProcess } from "child_process";
+import { spawn, ChildProcess } from "child_process";
 import cookieParser from "cookie-parser";
+import "dotenv/config";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,11 +14,11 @@ const CONFIG = {
   PORT: 3000,
   LOG_FILE: "active_threads.log",
   LOCK_FILE: "firefox_optimizer.lock",
-  PID_FILE: ".server.pid",
   OPTIMIZER_SCRIPT: "firefox_content_opt.sh",
   MAX_LOG_LINES: 500,
-  /** Only need the most recent METRICS line — 30 lines is ample. */
-  METRICS_WINDOW: 30,
+  METRICS_WINDOW: 500,
+  POLL_INTERVAL: 2000,
+  BACKUP_DIR: "backups",
   AUTH_COOKIE: "fx_opt_auth",
   DASHBOARD_PASSWORD: process.env.DASHBOARD_PASSWORD || "admin123",
   SUDO_PASSWORD: process.env.SUDO_PASSWORD || "",
@@ -32,103 +33,39 @@ let runtimeConfig = {
 };
 
 /**
- * Read the last N lines of a file efficiently by seeking near the end.
- * Uses try/finally to guarantee the file descriptor is always closed.
+ * Utility to read the last N lines of a file efficiently.
+ * For very large files, this should use a reverse stream, but for this utility,
+ * reading the last chunk is sufficient.
  */
 function readLastLines(filePath: string, maxLines: number): string[] {
-  if (!fs.existsSync(filePath)) {
-    return ["SYSTEM: Log file not found. System may be initializing..."];
-  }
-  let fd: number | null = null;
   try {
+    if (!fs.existsSync(filePath)) {
+      return ["SYSTEM: Log file not found. System may be initializing..."];
+    }
+    
+    // Read the last 64KB of the file which should contain more than enough lines
     const stats = fs.statSync(filePath);
     const bufferSize = Math.min(stats.size, 65536);
     const buffer = Buffer.alloc(bufferSize);
-    fd = fs.openSync(filePath, 'r');
+    const fd = fs.openSync(filePath, 'r');
+    
     fs.readSync(fd, buffer, 0, bufferSize, Math.max(0, stats.size - bufferSize));
+    fs.closeSync(fd);
+    
     const content = buffer.toString('utf8');
     const lines = content.split('\n').filter(Boolean);
     return lines.slice(-maxLines);
   } catch (err) {
     console.error(`Error reading lines from ${filePath}:`, err);
     return [`SYSTEM: Error reading logs: ${err instanceof Error ? err.message : String(err)}`];
-  } finally {
-    if (fd !== null) fs.closeSync(fd);
   }
 }
-
-// ─── Structured cycle parser ────────────────────────────────────────────────
-
-interface ThreadInfo {
-  pid: string;
-  tid: string;
-  cpu: number;
-  memMB: number;
-  status: string;
-}
-
-interface CycleData {
-  timestamp: string;
-  systemLoad: { one: number; five: number; fifteen: number };
-  memUsedMB: number;
-  memTotalMB: number;
-  memPercent: number;
-  threads: ThreadInfo[];
-}
-
-/**
- * Scan backwards through log lines to extract the most recent complete cycle.
- * Pattern (reading backwards): METRICS line → thread lines → SYSTEM: line → Timestamp: line.
- */
-function parseLatestCycle(lines: string[]): CycleData | null {
-  let inCycle = false;
-  let timestamp = '';
-  let loadOne = 0, loadFive = 0, loadFifteen = 0;
-  let memUsedMB = 0, memTotalMB = 0, memPercent = 0;
-  const threads: ThreadInfo[] = [];
-
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i];
-
-    // Trigger: pass a METRICS line going backwards, then start collecting
-    if (!inCycle) {
-      if (line.includes('METRICS |')) inCycle = true;
-      continue;
-    }
-
-    // Thread: "PID 61849 TID 61849 | CPU 69.6% | MEM 578 MB | THROTTLED"
-    const tm = line.match(/PID\s+(\d+)\s+TID\s+(\d+)\s+\|\s+CPU\s+([\d.]+)%\s+\|\s+MEM\s+(\d+)\s+MB\s+\|\s+(\S+)/);
-    if (tm) {
-      threads.unshift({ pid: tm[1], tid: tm[2], cpu: parseFloat(tm[3]), memMB: parseInt(tm[4]), status: tm[5] });
-      continue;
-    }
-
-    // System: "SYSTEM: Load: 9.94 9.95 8.46 | Mem: Used: 4535MB / Total: 5818MB (77.9%)"
-    const sm = line.match(/SYSTEM: Load:\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+\|\s+Mem: Used:\s+(\d+)MB\s+\/\s+Total:\s+(\d+)MB\s+\(([\d.]+)%\)/);
-    if (sm) {
-      [, loadOne, loadFive, loadFifteen] = [0, parseFloat(sm[1]), parseFloat(sm[2]), parseFloat(sm[3])];
-      memUsedMB = parseInt(sm[4]); memTotalMB = parseInt(sm[5]); memPercent = parseFloat(sm[6]);
-      continue;
-    }
-
-    // Timestamp marks the start of this cycle — stop scanning
-    const tsm = line.match(/Timestamp:\s+(.+)/);
-    if (tsm) { timestamp = tsm[1].trim(); break; }
-  }
-
-  if (!timestamp && threads.length === 0) return null;
-  return { timestamp, systemLoad: { one: loadOne, five: loadFive, fifteen: loadFifteen }, memUsedMB, memTotalMB, memPercent, threads };
-}
-
-// ────────────────────────────────────────────────────────────────────────────
 
 async function startServer() {
   const app = express();
   app.use(cookieParser(process.env.AUTH_SECRET || "fx-opt-secret-default"));
   app.use(express.json());
   let optimizerProcess: ChildProcess | null = null;
-  // Tracks a pending auto-restart timer so explicit kills can cancel it cleanly.
-  let restartTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Auth Middleware
   const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -155,7 +92,7 @@ async function startServer() {
   });
 
   // Logout Endpoint
-  app.post("/api/logout", (_req, res) => {
+  app.post("/api/logout", (req, res) => {
     res.clearCookie(CONFIG.AUTH_COOKIE);
     res.json({ success: true });
   });
@@ -186,19 +123,24 @@ async function startServer() {
       });
 
       optimizerProcess.stderr?.on("data", (data) => {
-        console.error(`[Optimizer Error] ${data.toString().trim()}`);
+        const errorMsg = data.toString().trim();
+        console.error(`[Optimizer Error] ${errorMsg}`);
+        // Log critical errors to the audit trail so the user can see them in the UI
+        fs.appendFileSync(
+          path.join(process.cwd(), CONFIG.LOG_FILE),
+          `${new Date().toISOString()} | SYSTEM ERROR: ${errorMsg}\n`
+        );
       });
 
       optimizerProcess.on("exit", (code) => {
         console.log(`Optimizer process exited with code ${code}`);
         optimizerProcess = null;
-        // Auto-restart unless an explicit kill already scheduled a restart.
-        if (!restartTimer) {
-          console.log("Optimizer exited unexpectedly — auto-restarting in 3s...");
-          restartTimer = setTimeout(() => {
-            restartTimer = null;
-            startOptimizer();
-          }, 3000);
+        // If it crashed (non-zero), log it to the audit trail
+        if (code !== 0 && code !== null) {
+          fs.appendFileSync(
+            path.join(process.cwd(), CONFIG.LOG_FILE),
+            `${new Date().toISOString()} | CRITICAL: Optimizer crashed with code ${code}. Check dependencies.\n`
+          );
         }
       });
     } catch (err) {
@@ -210,7 +152,7 @@ async function startServer() {
   startOptimizer();
 
   // API: Get latest logs
-  app.get("/api/logs", requireAuth, (_req, res) => {
+  app.get("/api/logs", requireAuth, (req, res) => {
     const logPath = path.join(process.cwd(), CONFIG.LOG_FILE);
     const lines = readLastLines(logPath, CONFIG.MAX_LOG_LINES);
     
@@ -222,14 +164,30 @@ async function startServer() {
   });
 
   // API: Get system status
-  app.get("/api/status", requireAuth, (_req, res) => {
+  app.get("/api/status", requireAuth, async (req, res) => {
     let sudoStatus = "missing";
     try {
-      // Use top-level execSync (avoids dynamic import overhead on every 2s poll)
-      execSync("sudo -n true 2>/dev/null", { stdio: 'ignore' });
+      // Check if sudo is available non-interactively
+      const { execSync } = await import("child_process");
+      execSync("sudo -n true 2>/dev/null");
       sudoStatus = "acquired";
-    } catch {
+    } catch (err) {
       sudoStatus = "missing";
+    }
+
+    // Find the last optimizer cycle time from logs
+    const logPath = path.join(process.cwd(), CONFIG.LOG_FILE);
+    const recentLines = readLastLines(logPath, 50);
+    let lastCycleTime = null;
+    for (let i = recentLines.length - 1; i >= 0; i--) {
+      const line = recentLines[i];
+      if (line.includes("Timestamp:")) {
+        const match = line.match(/Timestamp:\s+(.*)/);
+        if (match) {
+          lastCycleTime = match[1];
+          break;
+        }
+      }
     }
 
     res.json({
@@ -239,6 +197,7 @@ async function startServer() {
       sudoStatus,
       config: runtimeConfig,
       lastUpdate: new Date().toISOString(),
+      lastOptimizerCycle: lastCycleTime
     });
   });
 
@@ -253,17 +212,16 @@ async function startServer() {
 
     // Restart optimizer to apply new config via environment variables
     if (optimizerProcess) {
-      if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
       optimizerProcess.kill();
       optimizerProcess = null;
-      restartTimer = setTimeout(() => { restartTimer = null; startOptimizer(); }, 500);
+      setTimeout(startOptimizer, 500);
     }
 
     res.json({ status: "Configuration updated. System restarting...", config: runtimeConfig });
   });
 
   // API: Generate Forensic Report
-  app.get("/api/report", requireAuth, (_req, res) => {
+  app.get("/api/report", requireAuth, (req, res) => {
     const logPath = path.join(process.cwd(), CONFIG.LOG_FILE);
     const report = {
       generatedAt: new Date().toISOString(),
@@ -278,11 +236,10 @@ async function startServer() {
     res.send(JSON.stringify(report, null, 2));
   });
 
-  // API: System Recovery — respond immediately, restart in background
-  app.get("/api/recover", requireAuth, (_req, res) => {
+  // API: System Recovery
+  app.get("/api/recover", requireAuth, async (req, res) => {
     console.log("SYSTEM: Initiating recovery sequence...");
-
-    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+    
     if (optimizerProcess) {
       optimizerProcess.kill();
       optimizerProcess = null;
@@ -290,35 +247,37 @@ async function startServer() {
 
     try {
       const lockPath = path.join(process.cwd(), CONFIG.LOCK_FILE);
-      if (fs.existsSync(lockPath)) fs.unlinkSync(lockPath);
+      if (fs.existsSync(lockPath)) {
+        fs.unlinkSync(lockPath);
+      }
       const pk = spawn("pkill", ["-f", CONFIG.OPTIMIZER_SCRIPT]);
       pk.on('error', (err) => console.warn("Recovery: pkill not available:", err.message));
     } catch (err) {
       console.warn("Recovery: Cleanup warning:", err);
     }
 
-    // Respond before the restart timer fires to avoid write-after-timeout errors
-    res.json({ status: "Recovery sequence completed. System restarting..." });
-    restartTimer = setTimeout(() => { restartTimer = null; startOptimizer(); }, 1000);
+    setTimeout(() => {
+      startOptimizer();
+      res.json({ status: "Recovery sequence completed. System restarting..." });
+    }, 1000);
   });
 
   // API: Toggle Forensic Mode
-  app.post("/api/forensic/toggle", requireAuth, (_req, res) => {
+  app.post("/api/forensic/toggle", requireAuth, (req, res) => {
     const current = process.env.FORENSIC_MODE === "true";
     process.env.FORENSIC_MODE = (!current).toString();
     
     if (optimizerProcess) {
-      if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
       optimizerProcess.kill();
       optimizerProcess = null;
-      restartTimer = setTimeout(() => { restartTimer = null; startOptimizer(); }, 500);
+      setTimeout(startOptimizer, 500);
     }
 
     res.json({ forensicMode: !current });
   });
 
   // API: Get metrics for D3 visualization
-  app.get("/api/metrics", requireAuth, (_req, res) => {
+  app.get("/api/metrics", requireAuth, (req, res) => {
     const logPath = path.join(process.cwd(), CONFIG.LOG_FILE);
     const recentLines = readLastLines(logPath, CONFIG.METRICS_WINDOW);
     
@@ -358,22 +317,6 @@ async function startServer() {
     });
   });
 
-  // API: Latest cycle — structured thread + system data for the live process table
-  app.get("/api/threads", requireAuth, (_req, res) => {
-    const logPath = path.join(process.cwd(), CONFIG.LOG_FILE);
-    // 300 lines covers several cycles (each cycle is ~10-20 lines typically)
-    const lines = readLastLines(logPath, 300);
-    const cycle = parseLatestCycle(lines);
-    if (!cycle) {
-      return res.json({
-        timestamp: null, threads: [],
-        systemLoad: { one: 0, five: 0, fifteen: 0 },
-        memUsedMB: 0, memTotalMB: 0, memPercent: 0,
-      });
-    }
-    res.json(cycle);
-  });
-
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     try {
@@ -390,54 +333,34 @@ async function startServer() {
     const distPath = path.join(process.cwd(), "dist");
     if (fs.existsSync(distPath)) {
       app.use(express.static(distPath));
-      app.get("*", (_req, res) => {
+      app.get("*", (req, res) => {
         res.sendFile(path.join(distPath, "index.html"));
       });
     } else {
       console.warn("Production build (dist/) not found. Serving fallback.");
-      app.get("*", (_req, res) => res.status(404).send("Application not built."));
+      app.get("*", (req, res) => res.status(404).send("Application not built."));
     }
   }
 
   const server = app.listen(CONFIG.PORT, "0.0.0.0", () => {
-    // Write PID file so scripts/stop.sh can send SIGTERM cleanly
-    const pidPath = path.join(process.cwd(), CONFIG.PID_FILE);
-    fs.writeFileSync(pidPath, String(process.pid));
-    console.log(`Server running on http://localhost:${CONFIG.PORT} (PID ${process.pid})`);
+    console.log(`Server running on http://localhost:${CONFIG.PORT}`);
   });
 
-  /** Remove all runtime artefacts so the process can be restarted cleanly. */
-  const cleanupArtefacts = () => {
-    const pidPath = path.join(process.cwd(), CONFIG.PID_FILE);
-    const lockPath = path.join(process.cwd(), CONFIG.LOCK_FILE);
-    try { if (fs.existsSync(pidPath))  fs.unlinkSync(pidPath);  } catch { /* best-effort */ }
-    try { if (fs.existsSync(lockPath)) fs.unlinkSync(lockPath); } catch { /* best-effort */ }
-  };
-
-  // Graceful shutdown — called by SIGTERM, SIGINT, and uncaught errors
-  const shutdown = (reason = "signal") => {
-    console.log(`Shutdown: ${reason}. Cleaning up...`);
-    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+  // Graceful shutdown
+  const shutdown = () => {
+    console.log("Shutdown signal received. Cleaning up...");
     if (optimizerProcess) {
       console.log("Terminating optimizer process...");
-      optimizerProcess.kill("SIGTERM");
-      optimizerProcess = null;
+      optimizerProcess.kill();
     }
-    cleanupArtefacts();
     server.close(() => {
-      console.log("Server closed cleanly.");
+      console.log("Server closed.");
       process.exit(0);
     });
-    // Force-exit after 5 s if server.close stalls (e.g. open keep-alive connections)
-    setTimeout(() => { console.warn("Force-exiting after 5 s timeout."); process.exit(1); }, 5000).unref();
   };
 
-  process.on('SIGTERM', () => shutdown("SIGTERM"));
-  process.on('SIGINT',  () => shutdown("SIGINT"));
-  process.on('uncaughtException', (err) => {
-    console.error("Uncaught exception:", err);
-    shutdown("uncaughtException");
-  });
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 startServer().catch(err => {

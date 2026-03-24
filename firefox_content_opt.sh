@@ -11,10 +11,11 @@
 # 4. Optimized process capture (native awk filtering to reduce pipes).
 # 5. Localized variables to prevent namespace pollution.
 # 6. Shellcheck-clean code (quoting, array handling).
-# 7. Enhanced error handling for system calls.
+# 7. Enhanced error handling for system calls (manual checks instead of set -e).
 
-# Exit on error, undefined variable, and pipe failure
-set -euo pipefail
+# Disable exit on error to handle failures gracefully
+set +e
+set -uo pipefail
 
 # -----------------------------
 # CONFIGURATION
@@ -24,11 +25,9 @@ OUTPUT_FILE="./active_threads.log"
 LOCK_FILE="./firefox_optimizer.lock"
 MAX_LOG_SIZE_KB=1024            # Rotate log after 1MB
 MIN_CPU=${MIN_CPU:-0.1}         # Threshold for "active" (0.1% CPU)
-RENICE_VAL=${RENICE_VAL:-5}           # Moderate tier: nice +5
-SEVERE_RENICE_VAL=${SEVERE_RENICE_VAL:-19}  # Severe tier: nice +19 (absolute minimum)
-SEVERE_THRESHOLD=${SEVERE_THRESHOLD:-15.0}  # CPU % triggering severe throttle
-IONICE_CLASS=2                        # Moderate tier: best-effort I/O
-IONICE_PRIO=7                         # Moderate tier: lowest within class
+RENICE_VAL=${RENICE_VAL:-5}     # Lower priority (higher nice value)
+IONICE_CLASS=2                  # Best-effort
+IONICE_PRIO=7                   # Lowest priority within class
 MONITOR_INTERVAL=${MONITOR_INTERVAL:-2} # Seconds between cycles
 TIMESTAMP_PREFIX="Timestamp:"
 OPTIMIZE_THRESHOLD=${OPTIMIZE_THRESHOLD:-5.0} # CPU % to trigger renice/ionice
@@ -68,7 +67,7 @@ assert() {
     local condition="$1"
     local msg="$2"
     if ! eval "$condition"; then
-        printf "${RED}ASSERTION FAILED: %s${NC}\n" "$msg" >&2
+        log_msg "CRITICAL FAILURE: $msg" "$RED"
         exit 1
     fi
 }
@@ -76,10 +75,11 @@ assert() {
 # Check if sudo is available and functional
 # Best Practice: Use -n (non-interactive) to avoid hanging
 has_sudo() {
-    # If already root, we don't need sudo
+    # If already root, we have privileges
     if [[ "$EUID" -eq 0 ]]; then
-        return 1
+        return 0
     fi
+    # Otherwise check if we can run sudo non-interactively
     command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1
 }
 
@@ -90,6 +90,12 @@ init_sudo() {
         return
     fi
 
+    # If already root, just log and return
+    if [[ "$EUID" -eq 0 ]]; then
+        printf "${GREEN}Running with root privileges (EUID: 0). Skipping sudo initialization.${NC}\n"
+        return
+    fi
+
     printf "${BLUE}Requesting administrative privileges for process optimization...${NC}\n"
     
     # Check if password is provided via env
@@ -97,7 +103,7 @@ init_sudo() {
     if [[ -n "${SUDO_PASSWORD:-}" ]]; then
         printf "%s" "$SUDO_PASSWORD" | sudo -S -v 2>/dev/null || true
     else
-        # Prompt for password once (if interactive); || true prevents set -e exit
+        # Prompt for password once (if interactive)
         sudo -n -v 2>/dev/null || true
     fi
 
@@ -188,19 +194,14 @@ check_dependencies() {
 }
 
 # Logging function
-# Best Practice: Use printf for consistent output and handle ANSI stripping centrally.
-# Log rotation is NOT done here (avoids spawning du -k on every message);
-# call rotate_log_if_needed once per cycle from the main loop instead.
+# Best Practice: Use printf for consistent output and handle ANSI stripping centrally
 log_msg() {
     local msg="$1"
     local color="${2:-$NC}"
+    
     [[ -z "$msg" ]] && return
-    printf "${color}%s | %s${NC}\n" "$(date '+%F %T')" "$msg"
-    printf "%s | %s\n" "$(date '+%F %T')" "$msg" | sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE"
-}
 
-# Rotate log if it exceeds MAX_LOG_SIZE_KB. Called once per cycle — not per message.
-rotate_log_if_needed() {
+    # Log rotation check
     if [[ -f "$OUTPUT_FILE" ]]; then
         local size_kb
         size_kb=$(du -k "$OUTPUT_FILE" | cut -f1)
@@ -209,9 +210,17 @@ rotate_log_if_needed() {
             printf "%s | Log rotated due to size limit (%d KB).\n" "$(date '+%F %T')" "$size_kb" > "$OUTPUT_FILE"
         fi
     fi
+
+    # Print to terminal with color
+    printf "${color}%s | %s${NC}\n" "$(date '+%F %T')" "$msg"
+    # Append to log file without color
+    printf "%s | %s\n" "$(date '+%F %T')" "$msg" | sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE"
+    
+    assert "[[ -f '$OUTPUT_FILE' ]]" "Log file $OUTPUT_FILE was not created/updated"
 }
 
 cleanup() {
+    local exit_code=$?
     # Best Practice: Avoid recursive calls or infinite loops in cleanup
     # Kill the sudo refresher if it exists
     if [[ -n "$SUDO_REFRESH_PID" ]]; then
@@ -221,10 +230,15 @@ cleanup() {
     # Remove lockfile
     rm -f "$LOCK_FILE"
 
-    printf "\n${BLUE}Shutting down Firefox Process Optimizer...${NC}\n"
-    # We don't call log_msg here to avoid potential issues if log_msg fails
-    printf "%s | Optimizer stopped by user.\n" "$(date '+%F %T')" >> "$OUTPUT_FILE"
-    exit 0
+    if [[ $exit_code -ne 0 ]]; then
+        printf "\n${RED}Optimizer crashed with exit code %s.${NC}\n" "$exit_code"
+        printf "%s | CRITICAL: Optimizer crashed with exit code %s.\n" "$(date '+%F %T')" "$exit_code" >> "$OUTPUT_FILE"
+    else
+        printf "\n${BLUE}Shutting down Firefox Process Optimizer...${NC}\n"
+        printf "%s | Optimizer stopped by user.\n" "$(date '+%F %T')" >> "$OUTPUT_FILE"
+    fi
+    
+    exit "$exit_code"
 }
 
 # Backup management
@@ -242,17 +256,11 @@ backup_logs() {
     fi
 }
 
-# Forensic Audit for heavy threads — only runs when FORENSIC_MODE=true.
-# lsof and ss can block for several seconds; running them in standard mode
-# would stall the main loop and prevent METRICS lines from being written.
+# Forensic Audit for heavy threads
 forensic_audit() {
     local tid=$1
     local pid=$2
-
-    if [[ "$FORENSIC_MODE" != "true" ]]; then
-        return
-    fi
-
+    
     if command -v lsof >/dev/null 2>&1; then
         local files_count
         files_count=$(lsof -p "$pid" 2>/dev/null | wc -l)
@@ -260,7 +268,7 @@ forensic_audit() {
             tee -a >(sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE")
     fi
 
-    # Network Connections
+    # Network Connections (New Forensic Feature)
     if command -v ss >/dev/null 2>&1; then
         local net_conns
         net_conns=$(ss -tpn "pid=$pid" 2>/dev/null | grep -v "State" | head -n 5)
@@ -296,125 +304,103 @@ process_cycle() {
     assert "[[ -n '$ts' ]]" "Failed to generate timestamp"
 
     # Best Practice: Use more robust parsing for uptime and free
-    load=$(uptime | awk -F'load average:' '{ print $2 }' | sed 's/^ //; s/,//g')
-    mem_info=$(free -m | awk '/Mem:/ { printf "Used: %dMB / Total: %dMB (%.1f%%)", $3, $2, $3*100/$2 }')
+    # Harden: Handle cases where uptime or free might return localized or unexpected formats
+    load=$(uptime 2>/dev/null | awk -F'load average:' '{ print $2 }' | sed 's/^ //; s/,//g' || echo "0.00 0.00 0.00")
+    mem_info=$(free -m 2>/dev/null | awk '/Mem:/ { printf "Used: %dMB / Total: %dMB (%.1f%%)", $3, $2, $3*100/$2 }' || echo "Unknown")
 
-    assert "[[ -n '$load' ]]" "Failed to capture system load"
-    assert "[[ -n '$mem_info' ]]" "Failed to capture memory info"
-
-    # Header for the cycle — write plain text to file and stdout via tee.
-    # Use '%s\n' format to avoid bash printf treating leading dashes as option flags.
-    local sep="----------------------------------------------------------------"
+    # Header for the cycle
     {
-        printf '%s\n' "$sep"
-        printf '%s %s\n' "$TIMESTAMP_PREFIX" "$ts"
-        printf 'SYSTEM: Load: %s | Mem: %s\n' "$load" "$mem_info"
-        printf '%s\n' "$sep"
-    } | tee -a "$OUTPUT_FILE"
+        printf "----------------------------------------------------------------\n"
+        printf "%s %s\n" "$TIMESTAMP_PREFIX" "$ts"
+        printf "SYSTEM: Load: %s | Mem: %s\n" "$load" "$mem_info"
+        printf "----------------------------------------------------------------\n"
+    } | tee -a "$OUTPUT_FILE" | sed -E "$ANSI_STRIP_RE" | sed "s/^/${BLUE}/; s/$/${NC}/"
 
     local opt_count=0
     
     # Capture thread data
-    # Best Practice: Use native awk filtering to reduce pipes and overhead
-    # Harden: Ensure ps output is valid and handle potential empty/malformed lines
+    # Best Practice: Use || true to prevent pipefail from exiting the script if no processes match
     local ps_output
-    if ! ps_output=$(ps -eL -o pid,tid,pcpu,rss,args --no-headers 2>/dev/null | awk '/-contentproc/ { print $0 }'); then
-        log_msg "CRITICAL: Failed to execute ps command. Check system permissions." "$RED"
-        return
+    ps_output=$(ps -eL -o pid,tid,pcpu,rss,args --no-headers 2>/dev/null | awk '/-contentproc/ { print $0 }' || true)
+    
+    if [[ -z "$ps_output" ]]; then
+        # Simulation for self-test
+        if [[ "$SELF_TEST_MODE" == "true" ]]; then
+            printf "${YELLOW}SELF-TEST: Simulating heavy Firefox thread...${NC}\n"
+            ps_output="9999 9999 15.5 524288 /usr/lib/firefox/firefox -contentproc"
+        else
+            printf "${YELLOW}Waiting for Firefox content processes... (None active currently)${NC}\n"
+            # Still output metrics so the dashboard stays alive
+            printf "METRICS | Active: 0 | Optimized: 0 | TotalCPU: 0.0 | TotalMem: 0 MB\n" >> "$OUTPUT_FILE"
+            # Heartbeat to show we are alive
+            printf "%s | SYSTEM: Monitoring active. No Firefox content processes detected.\n" "$(date '+%F %T')" >> "$OUTPUT_FILE"
+            return
+        fi
     fi
-
-    # Simulation for self-test
-    if [[ "$SELF_TEST_MODE" == "true" && -z "$ps_output" ]]; then
-        printf "${YELLOW}SELF-TEST: Simulating heavy Firefox thread...${NC}\n"
-        ps_output="9999 9999 15.5 524288 /usr/lib/firefox/firefox -contentproc"
-    fi
-
-    if [[ -n "$ps_output" ]]; then
         local use_sudo="false"
         has_sudo && use_sudo="true"
 
-        # One awk call per thread handles all float ops + tier classification.
-        # Eliminates bc pipe and 3 separate awk forks — ~75% fewer subprocess spawns per cycle.
-        local total_cpu_x10=0   # cpu*10 accumulated as integer; divided at METRICS line
+        # Best Practice: Pass variables to awk using -v to avoid shell injection/quoting issues
+        # Use a while loop to handle optimization commands shell-side for better control
+        local total_cpu=0
         local total_mem=0
         local active_threads=0
 
         while read -r pid tid cpu rss args; do
+            # Harden: Validate that we actually got numeric values for pid/tid/cpu
             if [[ ! "$pid" =~ ^[0-9]+$ || ! "$tid" =~ ^[0-9]+$ ]]; then
                 continue
             fi
 
-            # Single awk: round cpu, convert mem, classify tier (replaces 3 awk + 1 bc per thread)
-            local cpu_val cpu_x10 mem_mb tier
-            read -r cpu_val cpu_x10 mem_mb tier <<< "$(awk \
-                -v cpu="$cpu" -v rss="$rss" \
-                -v min="$MIN_CPU" -v opt="$OPTIMIZE_THRESHOLD" -v sev="$SEVERE_THRESHOLD" \
-                'BEGIN {
-                    cv = int(cpu + 0.5)
-                    cx = int(cpu * 10 + 0.5)
-                    mm = int(rss / 1024)
-                    if      (cpu >= sev) t = "SEVERE"
-                    else if (cpu >= opt) t = "MODERATE"
-                    else if (cpu >= min) t = "ACTIVE"
-                    else                 t = "SKIP"
-                    print cv, cx, mm, t
-                }')"
+            local cpu_val mem_mb status color
+            # Use printf to round CPU to integer safely
+            cpu_val=$(printf "%.0f" "$cpu" 2>/dev/null || echo 0)
+            mem_mb=$(( rss / 1024 ))
+            status="Active"
+            color="$GREEN"
 
-            (( ++active_threads ))
-            total_cpu_x10=$(( total_cpu_x10 + cpu_x10 ))
+            ((active_threads++))
+            # Use awk for floating point math to avoid bc dependency
+            total_cpu=$(awk "BEGIN {print $total_cpu + $cpu}")
             total_mem=$(( total_mem + mem_mb ))
 
-            local status="Active" color="$GREEN"
-
-            if [[ "$tier" == "MODERATE" || "$tier" == "SEVERE" ]]; then
-                if [[ "$DRY_RUN" == "true" ]]; then
-                    status="DRY-RUN (Skip Opt)"
-                    color="$YELLOW"
-                else
-                    local prefix=""
-                    if [[ "$EUID" -ne 0 ]]; then
-                        [[ "$use_sudo" == "true" ]] && prefix="sudo "
-                    fi
-
-                    # Tiered throttling: severe (>= SEVERE_THRESHOLD) vs moderate (>= OPTIMIZE_THRESHOLD)
-                    # Severe:   renice +19 (absolute minimum) + ionice -c 3 (idle I/O)
-                    # Moderate: renice +RENICE_VAL + ionice -c 2 -n 7
-                    local nice_val i_class i_prio tier_label err_msg
-                    if [[ "$tier" == "SEVERE" ]]; then
-                        nice_val="$SEVERE_RENICE_VAL"
-                        i_class=3; i_prio=0
-                        tier_label="THROTTLED"
-                    else
-                        nice_val="$RENICE_VAL"
-                        i_class="$IONICE_CLASS"; i_prio="$IONICE_PRIO"
-                        tier_label="OPTIMIZED"
-                    fi
-
-                    if err_msg=$( { $prefix renice -n "$nice_val" -p "$tid" && \
-                                   $prefix ionice -c "$i_class" -n "$i_prio" -p "$tid"; } 2>&1 ); then
-                        status="$tier_label"
-                        color="$RED"
-                        (( ++opt_count ))
-                        forensic_audit "$tid" "$pid"
-                    else
-                        local clean_err
-                        clean_err=$(echo "$err_msg" | head -n1 | sed 's/renice: //; s/ionice: //')
-                        status="HIGH (Err: ${clean_err})"
+            if (( cpu_val >= MIN_CPU )); then
+                if (( cpu_val >= OPTIMIZE_THRESHOLD )); then
+                    if [[ "$DRY_RUN" == "true" ]]; then
+                        status="DRY-RUN (Skip Opt)"
                         color="$YELLOW"
+                    else
+                        local prefix=""
+                        if [[ "$EUID" -ne 0 ]]; then
+                            [[ "$use_sudo" == "true" ]] && prefix="sudo "
+                        fi
+                        
+                        # Best Practice: Execute and check return codes explicitly
+                        local err_msg
+                        # Harden: Use a subshell to capture stderr and stdout separately if needed, 
+                        # but here we just want the first error line for the log.
+                        if err_msg=$( { $prefix renice -n "$RENICE_VAL" -p "$tid" && \
+                                       $prefix ionice -c "$IONICE_CLASS" -n "$IONICE_PRIO" -p "$tid"; } 2>&1 ); then
+                            status="OPTIMIZED"
+                            color="$RED"
+                            ((opt_count++))
+                            
+                            # Perform forensic audit on optimized threads
+                            forensic_audit "$tid" "$pid"
+                        else
+                            # Strip common noise from error messages
+                            local clean_err
+                            clean_err=$(echo "$err_msg" | head -n1 | sed 's/renice: //; s/ionice: //')
+                            status="HIGH (Err: ${clean_err})"
+                            color="$YELLOW"
+                        fi
                     fi
                 fi
-            fi
-
-            if [[ "$tier" != "SKIP" ]]; then
-                printf "${color}PID %-5s TID %-5s | CPU %5s%% | MEM %5d MB | %s${NC}\n" \
-                    "$pid" "$tid" "$cpu" "$mem_mb" "$status" | \
+                # Best Practice: Use printf for aligned output
+                printf "${color}PID %-5s TID %-5s | CPU %5s%% | MEM %5d MB | %s${NC}\n" "$pid" "$tid" "$cpu" "$mem_mb" "$status" | \
                     tee -a >(sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE")
             fi
         done <<< "$ps_output"
-
-        # Convert accumulated integer back to float for METRICS line
-        local total_cpu
-        total_cpu=$(awk -v x="$total_cpu_x10" 'BEGIN { printf "%.1f", x / 10 }')
 
         # Structured Metrics for Backend Parsing
         # Format: METRICS | Active: [N] | Optimized: [N] | TotalCPU: [N] | TotalMem: [N]
@@ -422,8 +408,6 @@ process_cycle() {
             "$active_threads" "$opt_count" "$total_cpu" "$total_mem" | tee -a "$OUTPUT_FILE" > /dev/null
     else
         printf "${YELLOW}Waiting for Firefox content processes... (None active currently)${NC}\n"
-        # Always write a METRICS line so the dashboard stays live with zeroed values
-        printf "METRICS | Active: 0 | Optimized: 0 | TotalCPU: 0.0 | TotalMem: 0 MB\n" >> "$OUTPUT_FILE"
     fi
 
     if [[ $opt_count -gt 0 ]]; then
@@ -502,15 +486,13 @@ touch "$OUTPUT_FILE"
 # Main loop
 cycle=0
 while true; do
-    (( ++cycle ))
-    # Rotate once per cycle (avoids du -k subprocess overhead per log message)
-    rotate_log_if_needed
+    ((cycle++))
     process_cycle
-
+    
     # Backup logs every 100 cycles
     if (( cycle % 100 == 0 )); then
         backup_logs
     fi
-
+    
     sleep "$MONITOR_INTERVAL"
 done

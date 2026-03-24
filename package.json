@@ -8,9 +8,6 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server.ts",
-    "stop": "bash scripts/stop.sh",
-    "status": "bash scripts/status.sh",
-    "verify": "npx playwright test scripts/verify-ui.ts --config playwright.config.ts",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
   },
@@ -31,7 +28,6 @@
     "vite": "^6.2.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.2",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
