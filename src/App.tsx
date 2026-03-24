@@ -73,26 +73,26 @@ function LiveMetricsChart({ data }: { data: any[] }) {
       .range([margin.left, width - margin.right]);
 
     const y = d3.scaleLinear()
-      .domain([0, d3.max(data, d => Math.max(d.optimized, d.active)) || 10])
+      .domain([0, d3.max(data, d => Math.max(d.totalCpu || 0, d.active)) || 100])
       .nice()
       .range([height - margin.bottom, margin.top]);
 
-    // Area for Optimized
-    const areaOptimized = d3.area<any>()
+    // Area for CPU Load
+    const areaCpu = d3.area<any>()
       .x(d => x(new Date(d.timestamp)))
       .y0(height - margin.bottom)
-      .y1(d => y(d.optimized))
+      .y1(d => y(d.totalCpu || 0))
       .curve(d3.curveMonotoneX);
 
     svg.append("path")
       .datum(data)
       .attr("fill", "rgba(242, 125, 38, 0.1)")
-      .attr("d", areaOptimized);
+      .attr("d", areaCpu);
 
     // Lines
-    const lineOptimized = d3.line<any>()
+    const lineCpu = d3.line<any>()
       .x(d => x(new Date(d.timestamp)))
-      .y(d => y(d.optimized))
+      .y(d => y(d.totalCpu || 0))
       .curve(d3.curveMonotoneX);
 
     const lineActive = d3.line<any>()
@@ -135,7 +135,7 @@ function LiveMetricsChart({ data }: { data: any[] }) {
       .attr("fill", "none")
       .attr("stroke", "#F27D26")
       .attr("stroke-width", 1.5)
-      .attr("d", lineOptimized);
+      .attr("d", lineCpu);
 
     svg.append("path")
       .datum(data)
@@ -148,6 +148,72 @@ function LiveMetricsChart({ data }: { data: any[] }) {
   }, [data]);
 
   return <svg ref={svgRef} className="w-full h-full" />;
+}
+
+function ThreadInspector({ threads }: { threads: any[] }) {
+  return (
+    <div className="hardware-card overflow-hidden">
+      <div className="scanline" />
+      <div className="p-4 border-b border-white/5 flex items-center justify-between bg-white/5">
+        <div className="flex items-center gap-2 hardware-label">
+          <Layers size={12} /> Thread Inspector
+        </div>
+        <div className="text-[8px] font-mono opacity-40 uppercase tracking-widest">
+          {threads.length} Active Threads
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left font-mono text-[9px]">
+          <thead>
+            <tr className="border-b border-white/5 bg-white/5">
+              <th className="p-3 uppercase tracking-widest opacity-40">PID/TID</th>
+              <th className="p-3 uppercase tracking-widest opacity-40">CPU %</th>
+              <th className="p-3 uppercase tracking-widest opacity-40">MEM</th>
+              <th className="p-3 uppercase tracking-widest opacity-40">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {threads.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="p-8 text-center opacity-20 italic">
+                  No active Firefox content threads detected.
+                </td>
+              </tr>
+            ) : (
+              threads.map((t, i) => (
+                <tr key={`${t.pid}-${t.tid}-${i}`} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                  <td className="p-3 font-bold">
+                    <span className="opacity-40">{t.pid}</span> / <span className="text-[#F27D26]">{t.tid}</span>
+                  </td>
+                  <td className="p-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-12 h-1 bg-white/10 rounded-full overflow-hidden">
+                        <div 
+                          className={`h-full ${t.cpu > 50 ? 'bg-red-500' : t.cpu > 20 ? 'bg-yellow-500' : 'bg-green-500'}`}
+                          style={{ width: `${Math.min(t.cpu, 100)}%` }}
+                        />
+                      </div>
+                      <span>{t.cpu.toFixed(1)}%</span>
+                    </div>
+                  </td>
+                  <td className="p-3 opacity-60">{t.mem} MB</td>
+                  <td className="p-3">
+                    <span className={`px-1.5 py-0.5 rounded-sm text-[8px] font-black uppercase tracking-tighter ${
+                      t.status.includes('OPTIMIZED') ? 'bg-red-500/20 text-red-500' : 
+                      t.status.includes('HIGH') ? 'bg-yellow-500/20 text-yellow-500' : 
+                      'bg-green-500/20 text-green-500'
+                    }`}>
+                      {t.status}
+                    </span>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 export default function AppWrapper() {
@@ -165,6 +231,7 @@ function App() {
   const [logs, setLogs] = useState<string[]>([]);
   const [status, setStatus] = useState<any>(null);
   const [metricsHistory, setMetricsHistory] = useState<any[]>([]);
+  const [threads, setThreads] = useState<any[]>([]);
   const [totalThrottled, setTotalThrottled] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -275,6 +342,10 @@ function App() {
       if (!res.ok) throw new Error("Metrics fetch failed");
       const data = await res.json();
       
+      if (data.threads) {
+        setThreads(data.threads);
+      }
+
       setMetricsHistory(prev => {
         if (prev.length > 0 && prev[prev.length - 1].timestamp === data.timestamp) {
           return prev;
@@ -642,79 +713,87 @@ function App() {
 
         {/* Center/Right: Terminal & Logs */}
         <div className="col-span-12 lg:col-span-9 space-y-6">
-          <div className="hardware-card flex flex-col h-[calc(100vh-180px)] min-h-[600px]">
-            <div className="scanline" />
-            
-            <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
-              <div className="flex items-center gap-3">
-                <Terminal size={14} className="text-[#8E9299]" />
-                <span className="hardware-label">System Audit Trail</span>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="flex gap-1">
-                  {[1, 2, 3].map(i => (
-                    <div key={i} className="w-1 h-3 bg-white/10 rounded-full" />
-                  ))}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[calc(100vh-180px)] min-h-[600px]">
+            {/* Terminal Logs */}
+            <div className="hardware-card flex flex-col h-full">
+              <div className="scanline" />
+              
+              <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
+                <div className="flex items-center gap-3">
+                  <Terminal size={14} className="text-[#8E9299]" />
+                  <span className="hardware-label">System Audit Trail</span>
                 </div>
-                <div className="hardware-label !text-[9px] opacity-30">TTY: /dev/pts/0</div>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-8 font-mono text-[12px] space-y-1.5 custom-scrollbar bg-black/40">
-              <AnimatePresence mode="popLayout">
-                {logs.length > 0 ? (
-                  logs.filter(line => !line.includes("METRICS |")).map((line, i) => {
-                    const isTimestamp = line.includes("Timestamp:");
-                    const isSystem = line.includes("SYSTEM:");
-                    const isOptimized = line.includes("OPTIMIZED");
-                    const isActive = line.includes("Active");
-                    const isWaiting = line.includes("Waiting");
-                    const isForensic = line.includes("FORENSIC:");
-
-                    return (
-                      <motion.div 
-                        key={i}
-                        initial={{ opacity: 0, x: -4 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        className={`
-                          flex gap-4
-                          ${isTimestamp ? 'text-[#F27D26] mt-6 mb-2 font-black border-b border-[#F27D26]/20 pb-1' : ''}
-                          ${isSystem ? 'text-blue-400/80' : ''}
-                          ${isOptimized ? 'text-red-400 font-bold bg-red-400/5 px-1' : ''}
-                          ${isActive ? 'text-green-400/90' : ''}
-                          ${isForensic ? 'text-cyan-400/80 border-l-2 border-cyan-400/40 pl-2 italic' : ''}
-                          ${isWaiting ? 'text-yellow-400/60 italic' : 'text-white/50'}
-                        `}
-                      >
-                        <span className="opacity-20 select-none w-8 text-right">{(i + 1).toString().padStart(3, '0')}</span>
-                        <span className="flex-1">{line}</span>
-                      </motion.div>
-                    );
-                  })
-                ) : (
-                  <div className="h-full flex flex-col items-center justify-center space-y-4 opacity-20">
-                    <RefreshCw size={32} className="animate-spin" />
-                    <span className="hardware-label">Awaiting Data Stream...</span>
+                <div className="flex items-center gap-4">
+                  <div className="flex gap-1">
+                    {[1, 2, 3].map(i => (
+                      <div key={i} className="w-1 h-3 bg-white/10 rounded-full" />
+                    ))}
                   </div>
-                )}
-              </AnimatePresence>
-              <div ref={logEndRef} />
+                  <div className="hardware-label !text-[9px] opacity-30">TTY: /dev/pts/0</div>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-8 font-mono text-[11px] space-y-1.5 custom-scrollbar bg-black/40">
+                <AnimatePresence mode="popLayout">
+                  {logs.length > 0 ? (
+                    logs.filter(line => !line.includes("METRICS |") && !line.includes("THREAD |")).map((line, i) => {
+                      const isTimestamp = line.includes("Timestamp:");
+                      const isSystem = line.includes("SYSTEM:");
+                      const isOptimized = line.includes("OPTIMIZED");
+                      const isActive = line.includes("Active");
+                      const isWaiting = line.includes("Waiting");
+                      const isForensic = line.includes("FORENSIC:");
+
+                      return (
+                        <motion.div 
+                          key={i}
+                          initial={{ opacity: 0, x: -4 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          className={`
+                            flex gap-4
+                            ${isTimestamp ? 'text-[#F27D26] mt-6 mb-2 font-black border-b border-[#F27D26]/20 pb-1' : ''}
+                            ${isSystem ? 'text-blue-400/80' : ''}
+                            ${isOptimized ? 'text-red-400 font-bold bg-red-400/5 px-1' : ''}
+                            ${isActive ? 'text-green-400/90' : ''}
+                            ${isForensic ? 'text-cyan-400/80 border-l-2 border-cyan-400/40 pl-2 italic' : ''}
+                            ${isWaiting ? 'text-yellow-400/60 italic' : 'text-white/50'}
+                          `}
+                        >
+                          <span className="opacity-20 select-none w-8 text-right">{(i + 1).toString().padStart(3, '0')}</span>
+                          <span className="flex-1">{line}</span>
+                        </motion.div>
+                      );
+                    })
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center space-y-4 opacity-20">
+                      <RefreshCw size={32} className="animate-spin" />
+                      <span className="hardware-label">Awaiting Data Stream...</span>
+                    </div>
+                  )}
+                </AnimatePresence>
+                <div ref={logEndRef} />
+              </div>
+
+              <div className="px-6 py-3 border-t border-white/5 bg-white/[0.02] flex items-center justify-between">
+                <div className="flex items-center gap-6">
+                  <div className="flex items-center gap-2">
+                    <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                    <span className="hardware-label !text-[8px]">Link: Stable</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-white/30">
+                    <Activity size={10} />
+                    <span className="hardware-label !text-[8px]">Buffer: 1024KB</span>
+                  </div>
+                </div>
+                <div className="hardware-label !text-[8px] opacity-20">
+                  End of Stream
+                </div>
+              </div>
             </div>
 
-            <div className="px-6 py-3 border-t border-white/5 bg-white/[0.02] flex items-center justify-between">
-              <div className="flex items-center gap-6">
-                <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                  <span className="hardware-label !text-[8px]">Link: Stable</span>
-                </div>
-                <div className="flex items-center gap-2 text-white/30">
-                  <Activity size={10} />
-                  <span className="hardware-label !text-[8px]">Buffer: 1024KB</span>
-                </div>
-              </div>
-              <div className="hardware-label !text-[8px] opacity-20">
-                End of Stream
-              </div>
+            {/* Thread Inspector */}
+            <div className="h-full">
+              <ThreadInspector threads={threads} />
             </div>
           </div>
         </div>

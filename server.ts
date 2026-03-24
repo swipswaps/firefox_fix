@@ -286,24 +286,43 @@ async function startServer() {
     let totalCpu = 0;
     let totalMem = 0;
     let lastMetricsLine = "";
+    const threads: any[] = [];
 
-    // Find the most recent METRICS line
+    // Find the most recent METRICS line and collect THREAD lines from the same cycle
+    let inLatestCycle = false;
     for (let i = recentLines.length - 1; i >= 0; i--) {
-      if (recentLines[i].includes("METRICS |")) {
-        lastMetricsLine = recentLines[i];
-        break;
+      const line = recentLines[i];
+      
+      if (line.includes("METRICS |")) {
+        if (!lastMetricsLine) {
+          lastMetricsLine = line;
+          inLatestCycle = true;
+        } else if (inLatestCycle) {
+          break;
+        }
+      }
+
+      if (inLatestCycle && line.includes("THREAD |")) {
+        const threadData: any = {};
+        line.split("|").slice(1).forEach(part => {
+          const [key, val] = part.split(":").map(s => s.trim());
+          threadData[key.toLowerCase()] = isNaN(Number(val)) ? val : Number(val);
+        });
+        threads.push(threadData);
+      }
+
+      if (inLatestCycle && line.includes("Timestamp:")) {
+        inLatestCycle = false;
       }
     }
 
     if (lastMetricsLine) {
-      // Parse: METRICS | Active: 10 | Optimized: 2 | TotalCPU: 15.5 | TotalMem: 2048 MB
       const parts = lastMetricsLine.split("|").map(p => p.trim());
       activeCount = parseInt(parts[1]?.split(":")[1]) || 0;
       optimizedCount = parseInt(parts[2]?.split(":")[1]) || 0;
       totalCpu = parseFloat(parts[3]?.split(":")[1]) || 0;
       totalMem = parseInt(parts[4]?.split(":")[1]) || 0;
     } else {
-      // Fallback to legacy parsing if METRICS line isn't found yet
       optimizedCount = recentLines.filter(l => l.includes("OPTIMIZED")).length;
       activeCount = recentLines.filter(l => l.includes("Active")).length;
     }
@@ -313,6 +332,7 @@ async function startServer() {
       active: activeCount,
       totalCpu,
       totalMem,
+      threads,
       timestamp: new Date().toISOString()
     });
   });

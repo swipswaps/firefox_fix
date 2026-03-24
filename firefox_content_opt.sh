@@ -399,6 +399,9 @@ process_cycle() {
                 # Best Practice: Use printf for aligned output
                 printf "${color}PID %-5s TID %-5s | CPU %5s%% | MEM %5d MB | %s${NC}\n" "$pid" "$tid" "$cpu" "$mem_mb" "$status" | \
                     tee -a >(sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE")
+                # Structured thread data for backend parsing
+                printf "THREAD | PID: %d | TID: %d | CPU: %s | MEM: %d | STATUS: %s\n" \
+                    "$pid" "$tid" "$cpu" "$mem_mb" "$status" >> "$OUTPUT_FILE"
             fi
         done <<< "$ps_output"
 
@@ -406,10 +409,7 @@ process_cycle() {
         # Format: METRICS | Active: [N] | Optimized: [N] | TotalCPU: [N] | TotalMem: [N]
         printf "METRICS | Active: %d | Optimized: %d | TotalCPU: %.1f | TotalMem: %d MB\n" \
             "$active_threads" "$opt_count" "$total_cpu" "$total_mem" | tee -a "$OUTPUT_FILE" > /dev/null
-    else
-        printf "${YELLOW}Waiting for Firefox content processes... (None active currently)${NC}\n"
-    fi
-
+    
     if [[ $opt_count -gt 0 ]]; then
         log_msg "Cycle complete: Optimized $opt_count heavy thread(s)." "$YELLOW"
     fi
