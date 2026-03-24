@@ -55,7 +55,7 @@ class MyErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryS
 }
 
 // D3 Chart Component
-function LiveMetricsChart({ data }: { data: any[] }) {
+function LiveMetricsChart({ data, onDataPointClick }: { data: any[], onDataPointClick?: (timestamp: string) => void }) {
   const svgRef = useRef<SVGSVGElement>(null);
 
   useEffect(() => {
@@ -145,7 +145,29 @@ function LiveMetricsChart({ data }: { data: any[] }) {
       .attr("stroke-dasharray", "4,2")
       .attr("d", lineActive);
 
-  }, [data]);
+    // Interactive Data Points (Circles)
+    svg.selectAll(".dot")
+      .data(data)
+      .enter().append("circle")
+      .attr("class", "dot")
+      .attr("cx", d => x(new Date(d.timestamp)))
+      .attr("cy", d => y(d.totalCpu || 0))
+      .attr("r", 3)
+      .attr("fill", "#F27D26")
+      .attr("stroke", "#0A0A0B")
+      .attr("stroke-width", 1)
+      .style("cursor", "pointer")
+      .on("mouseover", function() {
+        d3.select(this).attr("r", 6).attr("stroke-width", 2);
+      })
+      .on("mouseout", function() {
+        d3.select(this).attr("r", 3).attr("stroke-width", 1);
+      })
+      .on("click", (event, d) => {
+        if (onDataPointClick) onDataPointClick(d.timestamp);
+      });
+
+  }, [data, onDataPointClick]);
 
   return <svg ref={svgRef} className="w-full h-full" />;
 }
@@ -234,8 +256,33 @@ function App() {
   const [threads, setThreads] = useState<any[]>([]);
   const [totalThrottled, setTotalThrottled] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
+  const [highlightedLogIndex, setHighlightedLogIndex] = useState<number | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const logContainerRef = useRef<HTMLDivElement>(null);
   const lastOptimizedCount = useRef(0);
+
+  const scrollToLog = (timestamp: string) => {
+    // Format timestamp to match shell script: YYYY-MM-DD HH:MM:SS
+    const date = new Date(timestamp);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const searchStr = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+
+    const index = logs.findIndex(line => line.includes(searchStr));
+    
+    if (index !== -1) {
+      setHighlightedLogIndex(index);
+      const element = document.getElementById(`log-line-${index}`);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        toast.info("Drill-down active", { description: `Navigated to log entry: ${searchStr}` });
+        
+        // Clear highlight after a few seconds
+        setTimeout(() => setHighlightedLogIndex(null), 3000);
+      }
+    } else {
+      toast.error("Log entry not found", { description: "The selected timestamp is not present in the current audit trail." });
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -628,7 +675,7 @@ function App() {
                 <BarChart3 size={12} /> Activity Delta
               </div>
               <div className="h-[120px] w-full">
-                <LiveMetricsChart data={metricsHistory} />
+                <LiveMetricsChart data={metricsHistory} onDataPointClick={scrollToLog} />
               </div>
               <div className="mt-4 flex justify-between hardware-label !text-[8px] opacity-40">
                 <div className="flex items-center gap-1.5">
@@ -740,7 +787,10 @@ function App() {
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-8 font-mono text-[11px] space-y-1.5 custom-scrollbar bg-black/40">
+              <div 
+                ref={logContainerRef}
+                className="flex-1 overflow-y-auto p-8 font-mono text-[11px] space-y-1.5 custom-scrollbar bg-black/40"
+              >
                 <AnimatePresence mode="popLayout">
                   {logs.length > 0 ? (
                     logs.filter(line => !line.includes("METRICS |") && !line.includes("THREAD |")).map((line, i) => {
@@ -751,14 +801,16 @@ function App() {
                       const isActive = line.includes("Active");
                       const isWaiting = line.includes("Waiting");
                       const isForensic = line.includes("FORENSIC:");
+                      const isHighlighted = highlightedLogIndex === i;
 
                       return (
                         <motion.div 
                           key={i}
+                          id={`log-line-${i}`}
                           initial={{ opacity: 0, x: -4 }}
                           animate={{ opacity: 1, x: 0 }}
                           className={`
-                            flex gap-4
+                            flex gap-4 transition-all duration-500
                             ${isTimestamp ? 'text-[#F27D26] mt-6 mb-2 font-black border-b border-[#F27D26]/20 pb-1' : ''}
                             ${isSystem ? 'text-blue-400/80' : ''}
                             ${isSystemError ? 'text-red-500 font-black bg-red-500/10 px-2 py-1 border border-red-500/20' : ''}
@@ -766,6 +818,7 @@ function App() {
                             ${isActive ? 'text-green-400/90' : ''}
                             ${isForensic ? 'text-cyan-400/80 border-l-2 border-cyan-400/40 pl-2 italic' : ''}
                             ${isWaiting ? 'text-yellow-400/60 italic' : 'text-white/50'}
+                            ${isHighlighted ? 'bg-[#F27D26]/20 scale-[1.02] border-l-2 border-[#F27D26] pl-2' : ''}
                           `}
                         >
                           <span className="opacity-20 select-none w-8 text-right">{(i + 1).toString().padStart(3, '0')}</span>

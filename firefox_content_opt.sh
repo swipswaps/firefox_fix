@@ -303,12 +303,9 @@ process_cycle() {
     
     assert "[[ -n '$ts' ]]" "Failed to generate timestamp"
 
-    # Best Practice: Use more robust parsing for uptime and free
-    # Harden: Handle cases where uptime or free might return localized or unexpected formats
     load=$(uptime 2>/dev/null | awk -F'load average:' '{ print $2 }' | sed 's/^ //; s/,//g' || echo "0.00 0.00 0.00")
     mem_info=$(free -m 2>/dev/null | awk '/Mem:/ { printf "Used: %dMB / Total: %dMB (%.1f%%)", $3, $2, $3*100/$2 }' || echo "Unknown")
 
-    # Header for the cycle
     {
         printf "----------------------------------------------------------------\n"
         printf "%s %s\n" "$TIMESTAMP_PREFIX" "$ts"
@@ -317,98 +314,77 @@ process_cycle() {
     } | tee -a "$OUTPUT_FILE" | sed -E "$ANSI_STRIP_RE" | sed "s/^/${BLUE}/; s/$/${NC}/"
 
     local opt_count=0
-    
-    # Capture thread data
-    # Best Practice: Use || true to prevent pipefail from exiting the script if no processes match
     local ps_output
     ps_output=$(ps -eL -o pid,tid,pcpu,rss,args --no-headers 2>/dev/null | awk '/-contentproc/ { print $0 }' || true)
     
     if [[ -z "$ps_output" ]]; then
-        # Simulation for self-test
         if [[ "$SELF_TEST_MODE" == "true" ]]; then
             printf "${YELLOW}SELF-TEST: Simulating heavy Firefox thread...${NC}\n"
             ps_output="9999 9999 15.5 524288 /usr/lib/firefox/firefox -contentproc"
         else
             printf "${YELLOW}Waiting for Firefox content processes... (None active currently)${NC}\n"
-            # Still output metrics so the dashboard stays alive
             printf "METRICS | Active: 0 | Optimized: 0 | TotalCPU: 0.0 | TotalMem: 0 MB\n" >> "$OUTPUT_FILE"
-            # Heartbeat to show we are alive
             printf "%s | SYSTEM: Monitoring active. No Firefox content processes detected.\n" "$(date '+%F %T')" >> "$OUTPUT_FILE"
             return
         fi
     fi
-        local use_sudo="false"
-        has_sudo && use_sudo="true"
 
-        # Best Practice: Pass variables to awk using -v to avoid shell injection/quoting issues
-        # Use a while loop to handle optimization commands shell-side for better control
-        local total_cpu=0
-        local total_mem=0
-        local active_threads=0
+    local use_sudo="false"
+    has_sudo && use_sudo="true"
+    local total_cpu=0
+    local total_mem=0
+    local active_threads=0
 
-        while read -r pid tid cpu rss args; do
-            # Harden: Validate that we actually got numeric values for pid/tid/cpu
-            if [[ ! "$pid" =~ ^[0-9]+$ || ! "$tid" =~ ^[0-9]+$ ]]; then
-                continue
-            fi
+    while read -r pid tid cpu rss args; do
+        if [[ ! "$pid" =~ ^[0-9]+$ || ! "$tid" =~ ^[0-9]+$ ]]; then
+            continue
+        fi
 
-            local cpu_val mem_mb status color
-            # Use printf to round CPU to integer safely
-            cpu_val=$(printf "%.0f" "$cpu" 2>/dev/null || echo 0)
-            mem_mb=$(( rss / 1024 ))
-            status="Active"
-            color="$GREEN"
+        local cpu_val mem_mb status color
+        cpu_val=$(printf "%.0f" "$cpu" 2>/dev/null || echo 0)
+        mem_mb=$(( rss / 1024 ))
+        status="Active"
+        color="$GREEN"
 
-            ((active_threads++))
-            # Use awk for floating point math to avoid bc dependency
-            total_cpu=$(awk "BEGIN {print $total_cpu + $cpu}")
-            total_mem=$(( total_mem + mem_mb ))
+        ((active_threads++))
+        total_cpu=$(awk "BEGIN {print $total_cpu + $cpu}")
+        total_mem=$(( total_mem + mem_mb ))
 
-            if (( cpu_val >= MIN_CPU )); then
-                if (( cpu_val >= OPTIMIZE_THRESHOLD )); then
-                    if [[ "$DRY_RUN" == "true" ]]; then
-                        status="DRY-RUN (Skip Opt)"
-                        color="$YELLOW"
+        if (( cpu_val >= MIN_CPU )); then
+            if (( cpu_val >= OPTIMIZE_THRESHOLD )); then
+                if [[ "$DRY_RUN" == "true" ]]; then
+                    status="DRY-RUN (Skip Opt)"
+                    color="$YELLOW"
+                else
+                    local prefix=""
+                    if [[ "$EUID" -ne 0 ]]; then
+                        [[ "$use_sudo" == "true" ]] && prefix="sudo "
+                    fi
+                    
+                    local err_msg
+                    if err_msg=$( { $prefix renice -n "$RENICE_VAL" -p "$tid" && \
+                                   $prefix ionice -c "$IONICE_CLASS" -n "$IONICE_PRIO" -p "$tid"; } 2>&1 ); then
+                        status="OPTIMIZED"
+                        color="$RED"
+                        ((opt_count++))
+                        forensic_audit "$tid" "$pid"
                     else
-                        local prefix=""
-                        if [[ "$EUID" -ne 0 ]]; then
-                            [[ "$use_sudo" == "true" ]] && prefix="sudo "
-                        fi
-                        
-                        # Best Practice: Execute and check return codes explicitly
-                        local err_msg
-                        # Harden: Use a subshell to capture stderr and stdout separately if needed, 
-                        # but here we just want the first error line for the log.
-                        if err_msg=$( { $prefix renice -n "$RENICE_VAL" -p "$tid" && \
-                                       $prefix ionice -c "$IONICE_CLASS" -n "$IONICE_PRIO" -p "$tid"; } 2>&1 ); then
-                            status="OPTIMIZED"
-                            color="$RED"
-                            ((opt_count++))
-                            
-                            # Perform forensic audit on optimized threads
-                            forensic_audit "$tid" "$pid"
-                        else
-                            # Strip common noise from error messages
-                            local clean_err
-                            clean_err=$(echo "$err_msg" | head -n1 | sed 's/renice: //; s/ionice: //')
-                            status="HIGH (Err: ${clean_err})"
-                            color="$YELLOW"
-                        fi
+                        local clean_err
+                        clean_err=$(echo "$err_msg" | head -n1 | sed 's/renice: //; s/ionice: //')
+                        status="HIGH (Err: ${clean_err})"
+                        color="$YELLOW"
                     fi
                 fi
-                # Best Practice: Use printf for aligned output
-                printf "${color}PID %-5s TID %-5s | CPU %5s%% | MEM %5d MB | %s${NC}\n" "$pid" "$tid" "$cpu" "$mem_mb" "$status" | \
-                    tee -a >(sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE")
-                # Structured thread data for backend parsing
-                printf "THREAD | PID: %d | TID: %d | CPU: %s | MEM: %d | STATUS: %s\n" \
-                    "$pid" "$tid" "$cpu" "$mem_mb" "$status" >> "$OUTPUT_FILE"
             fi
-        done <<< "$ps_output"
+            printf "${color}PID %-5s TID %-5s | CPU %5s%% | MEM %5d MB | %s${NC}\n" "$pid" "$tid" "$cpu" "$mem_mb" "$status" | \
+                tee -a >(sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE")
+            printf "THREAD | PID: %d | TID: %d | CPU: %s | MEM: %d | STATUS: %s\n" \
+                "$pid" "$tid" "$cpu" "$mem_mb" "$status" >> "$OUTPUT_FILE"
+        fi
+    done <<< "$ps_output"
 
-        # Structured Metrics for Backend Parsing
-        # Format: METRICS | Active: [N] | Optimized: [N] | TotalCPU: [N] | TotalMem: [N]
-        printf "METRICS | Active: %d | Optimized: %d | TotalCPU: %.1f | TotalMem: %d MB\n" \
-            "$active_threads" "$opt_count" "$total_cpu" "$total_mem" | tee -a "$OUTPUT_FILE" > /dev/null
+    printf "METRICS | Active: %d | Optimized: %d | TotalCPU: %.1f | TotalMem: %d MB\n" \
+        "$active_threads" "$opt_count" "$total_cpu" "$total_mem" | tee -a "$OUTPUT_FILE" > /dev/null
     
     if [[ $opt_count -gt 0 ]]; then
         log_msg "Cycle complete: Optimized $opt_count heavy thread(s)." "$YELLOW"
