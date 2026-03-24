@@ -47,6 +47,11 @@ NC='\033[0m' # No Color
 # Reference: https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python
 ANSI_STRIP_RE="s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g"
 
+# Ensure log file exists
+touch "$OUTPUT_FILE"
+
+log_msg "DEBUG: Optimizer script entry point reached" "$BLUE"
+
 # -----------------------------
 # OS CHECK
 # -----------------------------
@@ -74,13 +79,19 @@ assert() {
 
 # Check if sudo is available and functional
 # Best Practice: Use -n (non-interactive) to avoid hanging
+SUDO_PREFIX=""
 has_sudo() {
-    # If already root, we have privileges
+    # If already root, we have privileges and don't need sudo
     if [[ "$EUID" -eq 0 ]]; then
+        SUDO_PREFIX=""
         return 0
     fi
     # Otherwise check if we can run sudo non-interactively
-    command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1
+    if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+        SUDO_PREFIX="sudo"
+        return 0
+    fi
+    return 1
 }
 
 # Sudo Refresher
@@ -93,13 +104,19 @@ init_sudo() {
     # If already root, just log and return
     if [[ "$EUID" -eq 0 ]]; then
         printf "${GREEN}Running with root privileges (EUID: 0). Skipping sudo initialization.${NC}\n"
+        SUDO_PREFIX=""
+        return
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        printf "${YELLOW}WARNING: Sudo command not found. Optimizations may fail with 'Perm Denied'.${NC}\n"
+        SUDO_PREFIX=""
         return
     fi
 
     printf "${BLUE}Requesting administrative privileges for process optimization...${NC}\n"
     
     # Check if password is provided via env
-    local sudo_cmd="sudo -v"
     if [[ -n "${SUDO_PASSWORD:-}" ]]; then
         printf "%s" "$SUDO_PASSWORD" | sudo -S -v 2>/dev/null || true
     else
@@ -108,6 +125,7 @@ init_sudo() {
     fi
 
     if sudo -n -v 2>/dev/null; then
+        SUDO_PREFIX="sudo"
         # Keep-alive sudo in background subshell
         (
             while kill -0 "$$" 2>/dev/null; do
@@ -125,6 +143,7 @@ init_sudo() {
         printf "${GREEN}Sudo privileges acquired and kept alive (PID: %d).${NC}\n" "$SUDO_REFRESH_PID"
     else
         printf "${YELLOW}WARNING: Sudo privileges not acquired. Optimizations may fail with 'Perm Denied'.${NC}\n"
+        SUDO_PREFIX=""
     fi
 }
 
@@ -146,30 +165,30 @@ check_dependencies() {
         printf "${YELLOW}Missing dependencies: %s${NC}\n" "${missing[*]}"
         
         if has_sudo; then
-            printf "${BLUE}Attempting to install missing tools via sudo...${NC}\n"
+            printf "${BLUE}Attempting to install missing tools via ${SUDO_PREFIX:-root}...${NC}\n"
             if command -v dnf >/dev/null 2>&1; then
                 # Fedora/RHEL support
                 for tool in "${missing[@]}"; do
                     case "$tool" in
-                        "ps"|"pkill"|"free"|"uptime") sudo dnf install -y -q procps-ng ;;
-                        "renice") sudo dnf install -y -q util-linux ;;
-                        "ionice") sudo dnf install -y -q util-linux ;;
-                        *) sudo dnf install -y -q "$tool" ;;
+                        "ps"|"pkill"|"free"|"uptime") $SUDO_PREFIX dnf install -y -q procps-ng ;;
+                        "renice") $SUDO_PREFIX dnf install -y -q util-linux ;;
+                        "ionice") $SUDO_PREFIX dnf install -y -q util-linux ;;
+                        *) $SUDO_PREFIX dnf install -y -q "$tool" ;;
                     esac
                 done
             elif command -v apt-get >/dev/null 2>&1; then
-                sudo apt-get update -qq
+                $SUDO_PREFIX apt-get update -qq
                 for tool in "${missing[@]}"; do
                     case "$tool" in
-                        "ps"|"pkill"|"free"|"uptime") sudo apt-get install -y -qq procps ;;
-                        "renice") sudo apt-get install -y -qq bsdutils ;;
-                        "ionice") sudo apt-get install -y -qq util-linux ;;
-                        *) sudo apt-get install -y -qq "$tool" ;;
+                        "ps"|"pkill"|"free"|"uptime") $SUDO_PREFIX apt-get install -y -qq procps ;;
+                        "renice") $SUDO_PREFIX apt-get install -y -qq bsdutils ;;
+                        "ionice") $SUDO_PREFIX apt-get install -y -qq util-linux ;;
+                        *) $SUDO_PREFIX apt-get install -y -qq "$tool" ;;
                     esac
                 done
             elif command -v yum >/dev/null 2>&1; then
                 for tool in "${missing[@]}"; do
-                    sudo yum install -y -q "$tool"
+                    $SUDO_PREFIX yum install -y -q "$tool"
                 done
             fi
         else
@@ -356,20 +375,15 @@ process_cycle() {
                     status="DRY-RUN (Skip Opt)"
                     color="$YELLOW"
                 else
-                    local prefix=""
-                    if [[ "$EUID" -ne 0 ]]; then
-                        [[ "$use_sudo" == "true" ]] && prefix="sudo "
-                    fi
-                    
                     # Execute optimizations and capture errors
                     local renice_err=""
                     local ionice_err=""
                     
-                    if ! $prefix renice -n "$RENICE_VAL" -p "$tid" >/dev/null 2>&1; then
+                    if ! $SUDO_PREFIX renice -n "$RENICE_VAL" -p "$tid" >/dev/null 2>&1; then
                         renice_err="renice failed"
                     fi
                     
-                    if ! $prefix ionice -c "$IONICE_CLASS" -n "$IONICE_PRIO" -p "$tid" >/dev/null 2>&1; then
+                    if ! $SUDO_PREFIX ionice -c "$IONICE_CLASS" -n "$IONICE_PRIO" -p "$tid" >/dev/null 2>&1; then
                         ionice_err="ionice failed"
                     fi
 
