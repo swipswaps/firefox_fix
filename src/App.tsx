@@ -1,6 +1,6 @@
 import * as React from "react";
-import { useState, useEffect, useRef } from "react";
-import { Activity, Terminal, Shield, CheckCircle, AlertTriangle, RefreshCw, BarChart3, WifiOff, Cpu, HardDrive, Layers, Zap, Search } from "lucide-react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { Activity, Terminal, Shield, AlertTriangle, RefreshCw, BarChart3, WifiOff, Cpu, HardDrive, Layers, Zap, Search, Pause, Play, ChevronsDown, TrendingUp, TrendingDown, Minus, X, Server } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as d3 from "d3";
 import { Toaster, toast } from "sonner";
@@ -15,12 +15,8 @@ interface ErrorBoundaryState {
 }
 
 class MyErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  public props: ErrorBoundaryProps;
-  public state: ErrorBoundaryState;
-
   constructor(props: ErrorBoundaryProps) {
     super(props);
-    this.props = props;
     this.state = { hasError: false };
   }
 
@@ -54,8 +50,97 @@ class MyErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryS
   }
 }
 
+// ─── Shared types ─────────────────────────────────────────────────────────────
+
+interface ThreadInfo {
+  pid: string;
+  tid: string;
+  cpu: number;
+  memMB: number;
+  status: string;
+}
+
+interface CycleData {
+  timestamp: string | null;
+  systemLoad: { one: number; five: number; fifteen: number };
+  memUsedMB: number;
+  memTotalMB: number;
+  memPercent: number;
+  threads: ThreadInfo[];
+}
+
+interface LoadPoint  { timestamp: string; one: number; five: number; fifteen: number }
+interface MemPoint   { timestamp: string; percent: number; usedMB: number }
+interface MetricPoint { timestamp: string; optimized: number; active: number; totalCpu: number; totalMem: number }
+
+// ─── Thread Table ─────────────────────────────────────────────────────────────
+
+function ThreadTable({ threads, cycleTs }: { threads: ThreadInfo[]; cycleTs: string | null }) {
+  const sorted = useMemo(() => [...threads].sort((a, b) => b.cpu - a.cpu), [threads]);
+
+  const statusCls = (s: string) => {
+    if (s === 'THROTTLED') return 'text-orange-400 bg-orange-400/10 border border-orange-400/30';
+    if (s === 'OPTIMIZED') return 'text-red-400 bg-red-400/10 border border-red-400/30';
+    return 'text-green-400/80 bg-green-400/5 border border-green-400/20';
+  };
+  const cpuCls  = (c: number) => c > 15 ? 'text-orange-400 font-bold' : c > 5 ? 'text-yellow-400' : 'text-green-400';
+  const cpuBar  = (c: number) => c > 15 ? 'bg-orange-400' : c > 5 ? 'bg-yellow-400' : 'bg-green-400/60';
+
+  return (
+    <div className="hardware-card overflow-hidden flex flex-col">
+      <div className="px-4 py-2 border-b border-white/5 bg-white/[0.02] flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2">
+          <Server size={12} className="text-[#8E9299]" />
+          <span className="hardware-label">Thread Map</span>
+          {cycleTs && <span className="hardware-label !text-[8px] opacity-30">{cycleTs}</span>}
+        </div>
+        <span className="hardware-label !text-[8px] opacity-30">{threads.length} threads</span>
+      </div>
+      <div className="overflow-y-auto" style={{ maxHeight: '280px' }}>
+        <table className="w-full font-mono text-[10px] border-collapse">
+          <thead className="sticky top-0 bg-[#151619] z-10">
+            <tr className="border-b border-white/5 text-white/25 text-[8px] uppercase tracking-widest">
+              <th className="text-left px-3 py-2 font-bold">Status</th>
+              <th className="text-left px-3 py-2 font-bold">PID</th>
+              <th className="text-left px-3 py-2 font-bold">TID</th>
+              <th className="text-right px-3 py-2 font-bold">CPU%</th>
+              <th className="text-right px-3 py-2 font-bold">MEM</th>
+              <th className="px-3 py-2 font-bold w-28">Load</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.length === 0 ? (
+              <tr><td colSpan={6} className="text-center py-8 text-white/20 hardware-label !text-[9px]">No Firefox content threads detected</td></tr>
+            ) : sorted.map((t, i) => (
+              <tr key={`${t.pid}-${t.tid}-${i}`} className="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors">
+                <td className="px-3 py-1.5">
+                  <span className={`px-1.5 py-0.5 rounded-sm text-[7px] font-bold uppercase tracking-wider ${statusCls(t.status)}`}>{t.status}</span>
+                </td>
+                <td className="px-3 py-1.5 text-white/50">{t.pid}</td>
+                <td className="px-3 py-1.5 text-white/30">{t.tid === t.pid ? '(main)' : t.tid}</td>
+                <td className={`px-3 py-1.5 text-right tabular-nums ${cpuCls(t.cpu)}`}>{t.cpu.toFixed(1)}%</td>
+                <td className="px-3 py-1.5 text-right text-white/40 tabular-nums">
+                  {t.memMB >= 1024 ? (t.memMB / 1024).toFixed(1) + ' GB' : t.memMB + ' MB'}
+                </td>
+                <td className="px-3 py-1.5">
+                  <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full transition-all duration-500 ${cpuBar(t.cpu)}`}
+                      style={{ width: `${Math.min(t.cpu * 1.4, 100)}%` }} />
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── D3 Chart Component ───────────────────────────────────────────────────────
+
 // D3 Chart Component
-function LiveMetricsChart({ data }: { data: any[] }) {
+function LiveMetricsChart({ data }: { data: MetricPoint[] }) {
   const svgRef = useRef<SVGSVGElement>(null);
 
   useEffect(() => {
@@ -150,6 +235,63 @@ function LiveMetricsChart({ data }: { data: any[] }) {
   return <svg ref={svgRef} className="w-full h-full" />;
 }
 
+// System Load D3 chart (1m / 5m / 15m averages over time)
+function SystemLoadChart({ data }: { data: LoadPoint[] }) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  useEffect(() => {
+    if (!svgRef.current || data.length < 2) return;
+    const svg = d3.select(svgRef.current);
+    const W = svgRef.current.clientWidth, H = svgRef.current.clientHeight;
+    const m = { top: 6, right: 8, bottom: 18, left: 28 };
+    svg.selectAll("*").remove();
+
+    const x = d3.scaleTime().domain(d3.extent(data, d => new Date(d.timestamp)) as [Date,Date]).range([m.left, W - m.right]);
+    const maxLoad = Math.max(d3.max(data, d => d.one) ?? 1, 1);
+    const y = d3.scaleLinear().domain([0, maxLoad * 1.1]).nice().range([H - m.bottom, m.top]);
+
+    const mkLine = (key: keyof LoadPoint) => d3.line<LoadPoint>().x(d => x(new Date(d.timestamp))).y(d => y(d[key] as number)).curve(d3.curveMonotoneX);
+
+    svg.append("g").attr("transform", `translate(0,${H-m.bottom})`).call(d3.axisBottom(x).ticks(3).tickFormat(d3.timeFormat("%H:%M") as any)).attr("color","rgba(255,255,255,0.1)").attr("font-size","7px").attr("font-family","JetBrains Mono");
+    svg.append("g").attr("transform", `translate(${m.left},0)`).call(d3.axisLeft(y).ticks(3)).attr("color","rgba(255,255,255,0.1)").attr("font-size","7px").attr("font-family","JetBrains Mono");
+
+    const strokes: Array<[keyof LoadPoint, string, string]> = [["one","#F27D26",""], ["five","#facc15","4,2"], ["fifteen","#4ade80","2,4"]];
+    strokes.forEach(([k, stroke, dash]) => {
+      svg.append("path").datum(data).attr("fill","none").attr("stroke",stroke).attr("stroke-width",1.5).attr("stroke-dasharray",dash).attr("d", mkLine(k));
+    });
+  }, [data]);
+  return <svg ref={svgRef} className="w-full h-full" />;
+}
+
+// Memory % trend D3 chart
+function MemTrendChart({ data }: { data: MemPoint[] }) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  useEffect(() => {
+    if (!svgRef.current || data.length < 2) return;
+    const svg = d3.select(svgRef.current);
+    const W = svgRef.current.clientWidth, H = svgRef.current.clientHeight;
+    const m = { top: 6, right: 8, bottom: 18, left: 28 };
+    svg.selectAll("*").remove();
+
+    const x = d3.scaleTime().domain(d3.extent(data, d => new Date(d.timestamp)) as [Date,Date]).range([m.left, W - m.right]);
+    const y = d3.scaleLinear().domain([0, 100]).range([H - m.bottom, m.top]);
+
+    const area = d3.area<MemPoint>().x(d => x(new Date(d.timestamp))).y0(H - m.bottom).y1(d => y(d.percent)).curve(d3.curveMonotoneX);
+    const line = d3.line<MemPoint>().x(d => x(new Date(d.timestamp))).y(d => y(d.percent)).curve(d3.curveMonotoneX);
+
+    svg.append("g").attr("transform", `translate(0,${H-m.bottom})`).call(d3.axisBottom(x).ticks(3).tickFormat(d3.timeFormat("%H:%M") as any)).attr("color","rgba(255,255,255,0.1)").attr("font-size","7px").attr("font-family","JetBrains Mono");
+    svg.append("g").attr("transform", `translate(${m.left},0)`).call(d3.axisLeft(y).ticks(3).tickFormat(v => `${v}%`)).attr("color","rgba(255,255,255,0.1)").attr("font-size","7px").attr("font-family","JetBrains Mono");
+
+    // Colour red when > 85%, orange > 70%
+    const lastPct = data[data.length - 1]?.percent ?? 0;
+    const colour = lastPct > 85 ? '#ef4444' : lastPct > 70 ? '#F27D26' : '#4ade80';
+    svg.append("path").datum(data).attr("fill", colour + "18").attr("d", area);
+    svg.append("path").datum(data).attr("fill","none").attr("stroke",colour).attr("stroke-width",1.5).attr("d",line);
+  }, [data]);
+  return <svg ref={svgRef} className="w-full h-full" />;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function AppWrapper() {
   return (
     <MyErrorBoundary>
@@ -164,13 +306,24 @@ function App() {
   const [password, setPassword] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const [status, setStatus] = useState<any>(null);
-  const [metricsHistory, setMetricsHistory] = useState<any[]>([]);
+  const [metricsHistory, setMetricsHistory] = useState<MetricPoint[]>([]);
   const [totalThrottled, setTotalThrottled] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
+  const [displayedLogs, setDisplayedLogs] = useState<string[]>([]);
+  const [logFilter, setLogFilter] = useState<'all'|'throttled'|'optimized'|'system'>('all');
+  const [logSearch, setLogSearch] = useState('');
+  const [logPaused, setLogPaused] = useState(false);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  // Structured per-cycle data
+  const [cycleData, setCycleData] = useState<CycleData | null>(null);
+  const [loadHistory, setLoadHistory] = useState<LoadPoint[]>([]);
+  const [memHistory, setMemHistory] = useState<MemPoint[]>([]);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const logContainerRef = useRef<HTMLDivElement>(null);
+  const isAtBottom = useRef(true);
   const lastOptimizedCount = useRef(0);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       const res = await fetch("/api/login", {
@@ -185,25 +338,22 @@ function App() {
       } else {
         toast.error("Access Denied", { description: "Invalid system credentials." });
       }
-    } catch (err) {
+    } catch {
       toast.error("Login Error");
     }
-  };
+  }, [password]);
 
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     await fetch("/api/logout", { method: "POST" });
     setIsLoggedIn(false);
     window.location.reload();
-  };
+  }, []);
 
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     if (!isLoggedIn) return;
     try {
       const res = await fetch("/api/logs", { credentials: "include" });
-      if (res.status === 401) {
-        setIsLoggedIn(false);
-        return;
-      }
+      if (res.status === 401) { setIsLoggedIn(false); return; }
       if (!res.ok) throw new Error("Log fetch failed");
       const data = await res.json();
       setLogs(data.lines);
@@ -212,15 +362,12 @@ function App() {
       console.error("Failed to fetch logs", err);
       setIsOffline(true);
     }
-  };
+  }, [isLoggedIn]);
 
-  const fetchStatus = async () => {
+  const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/status", { credentials: "include" });
-      if (res.status === 401) {
-        setIsLoggedIn(false);
-        return;
-      }
+      if (res.status === 401) { setIsLoggedIn(false); return; }
       if (!res.ok) throw new Error("Status fetch failed");
       const data = await res.json();
       setStatus(data);
@@ -229,9 +376,9 @@ function App() {
       console.error("Failed to fetch status", err);
       if (isLoggedIn === null) setIsLoggedIn(false);
     }
-  };
+  }, [isLoggedIn]);
 
-  const updateConfig = async (newConfig: any) => {
+  const updateConfig = useCallback(async (newConfig: Record<string, unknown>) => {
     try {
       const res = await fetch("/api/config", {
         method: "POST",
@@ -242,83 +389,158 @@ function App() {
       const data = await res.json();
       toast.success("Configuration Updated", { description: data.status });
       fetchStatus();
-    } catch (err) {
+    } catch {
       toast.error("Failed to update configuration");
     }
-  };
+  }, [fetchStatus]);
 
-  const downloadReport = async () => {
+  const downloadReport = useCallback(async () => {
     try {
       const res = await fetch("/api/report", { credentials: "include" });
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `forensic_report_${new Date().getTime()}.json`;
+      a.download = `forensic_report_${Date.now()}.json`;
       document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
       toast.success("Forensic Report Generated");
-    } catch (err) {
+    } catch {
       toast.error("Failed to generate report");
     }
-  };
+  }, []);
 
-  const fetchMetrics = async () => {
+  const fetchMetrics = useCallback(async () => {
     if (!isLoggedIn) return;
     try {
       const res = await fetch("/api/metrics", { credentials: "include" });
-      if (res.status === 401) {
-        setIsLoggedIn(false);
-        return;
-      }
+      if (res.status === 401) { setIsLoggedIn(false); return; }
       if (!res.ok) throw new Error("Metrics fetch failed");
       const data = await res.json();
-      
-      setMetricsHistory(prev => {
-        if (prev.length > 0 && prev[prev.length - 1].timestamp === data.timestamp) {
-          return prev;
-        }
 
-        // Trigger toast if optimized count increased
+      setMetricsHistory(prev => {
+        if (prev.length > 0 && prev[prev.length - 1].timestamp === data.timestamp) return prev;
         if (data.optimized > lastOptimizedCount.current) {
           const diff = data.optimized - lastOptimizedCount.current;
-          setTotalThrottled(prev => prev + diff);
+          setTotalThrottled(t => t + diff);
           toast.success(`Optimization Event`, {
             description: `Throttled ${diff} heavy Firefox thread(s).`,
             icon: <Zap size={14} className="text-[#F27D26]" />,
           });
         }
         lastOptimizedCount.current = data.optimized;
-
         return [...prev.slice(-29), data];
       });
     } catch (err) {
       console.error("Failed to fetch metrics", err);
     }
-  };
+  }, [isLoggedIn]);
+
+  const fetchThreads = useCallback(async () => {
+    if (!isLoggedIn) return;
+    try {
+      const res = await fetch("/api/threads", { credentials: "include" });
+      if (res.status === 401) { setIsLoggedIn(false); return; }
+      if (!res.ok) return;
+      const data: CycleData = await res.json();
+      setCycleData(data);
+      if (data.timestamp) {
+        const ts = data.timestamp;
+        setLoadHistory(prev => {
+          const last = prev[prev.length - 1];
+          if (last?.timestamp === ts) return prev;
+          return [...prev.slice(-59), { timestamp: ts, one: data.systemLoad.one, five: data.systemLoad.five, fifteen: data.systemLoad.fifteen }];
+        });
+        setMemHistory(prev => {
+          const last = prev[prev.length - 1];
+          if (last?.timestamp === ts) return prev;
+          return [...prev.slice(-59), { timestamp: ts, percent: data.memPercent, usedMB: data.memUsedMB }];
+        });
+      }
+    } catch (err) {
+      console.error("Failed to fetch threads", err);
+    }
+  }, [isLoggedIn]);
 
   useEffect(() => {
     fetchStatus();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!isLoggedIn) return;
-    
     fetchLogs();
+    fetchThreads();
     const interval = setInterval(() => {
       fetchLogs();
       fetchStatus();
       fetchMetrics();
+      fetchThreads();
     }, 2000);
     return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoggedIn]);
 
+  // Freeze displayed log when paused; catch up immediately on resume
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
+    if (!logPaused) setDisplayedLogs(logs);
+  }, [logs, logPaused]);
 
-  if (isLoggedIn === false || isLoggedIn === null) {
+  // Track whether user is near the bottom of the log container
+  useEffect(() => {
+    const el = logContainerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      isAtBottom.current = dist < 120;
+      setShowJumpToBottom(dist > 240);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [isLoggedIn]);
+
+  // Auto-scroll: direct scrollTop assignment (no smooth animation) to prevent jitter every 2s
+  useEffect(() => {
+    const el = logContainerRef.current;
+    if (el && isAtBottom.current && !logPaused) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [displayedLogs, logPaused]);
+
+  const latestMetrics = useMemo(() => metricsHistory[metricsHistory.length - 1], [metricsHistory]);
+  const prevMetrics   = useMemo(() => metricsHistory[metricsHistory.length - 2], [metricsHistory]);
+  const cpuTrend      = useMemo(() =>
+    latestMetrics && prevMetrics ? latestMetrics.totalCpu - prevMetrics.totalCpu : 0,
+    [latestMetrics, prevMetrics]);
+
+  const filteredLogs = useMemo(() =>
+    displayedLogs
+      .filter(line => !line.includes("METRICS |"))
+      .filter(line => {
+        if (logFilter === 'throttled') return line.includes("THROTTLED");
+        if (logFilter === 'optimized') return line.includes("OPTIMIZED") || line.includes("THROTTLED");
+        if (logFilter === 'system')    return line.includes("SYSTEM:") || line.includes("Timestamp:")
+                                          || line.includes("Cycle complete") || line.includes("Starting Firefox");
+        return true;
+      })
+      .filter(line => !logSearch || line.toLowerCase().includes(logSearch.toLowerCase())),
+    [displayedLogs, logFilter, logSearch]);
+
+  // Loading state while session check is in flight
+  if (isLoggedIn === null) {
+    return (
+      <div className="min-h-screen bg-[#0A0A0B] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4 opacity-40">
+          <RefreshCw size={28} className="animate-spin text-[#F27D26]" />
+          <span className="hardware-label !text-[9px]">Establishing Link…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (isLoggedIn === false) {
     return (
       <div className="min-h-screen bg-[#0A0A0B] text-white flex items-center justify-center p-6 font-sans selection:bg-[#F27D26] selection:text-black">
         <div className="fixed inset-0 grid-pattern opacity-20 pointer-events-none" />
@@ -604,102 +826,244 @@ function App() {
             </div>
           </div>
 
-          <div className="hardware-card p-6 bg-[#F27D26]/5 border-[#F27D26]/20">
-            <div className="flex items-center gap-2 hardware-label !text-[#F27D26] mb-3">
-              <Zap size={12} className="animate-pulse" /> Efficiency Report
+          <div className="hardware-card p-6 bg-[#F27D26]/5 border-[#F27D26]/20 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 hardware-label !text-[#F27D26]">
+                <Zap size={12} className="animate-pulse" /> Live Metrics
+              </div>
+              {/* CPU trend indicator */}
+              <div className={`flex items-center gap-1 text-[9px] font-mono font-bold ${
+                cpuTrend > 1 ? 'text-red-400' : cpuTrend < -1 ? 'text-green-400' : 'text-white/30'
+              }`}>
+                {cpuTrend > 1 ? <TrendingUp size={11} /> : cpuTrend < -1 ? <TrendingDown size={11} /> : <Minus size={11} />}
+                {cpuTrend > 0 ? '+' : ''}{cpuTrend.toFixed(1)}%
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-4 mb-4">
-              <div className="space-y-1">
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-0.5">
                 <div className="hardware-label !text-[8px] opacity-50">Total CPU Load</div>
-                <div className="hardware-value text-xl">{metricsHistory[metricsHistory.length - 1]?.totalCpu?.toFixed(1) || '0.0'}%</div>
+                <div className="hardware-value text-2xl">{latestMetrics?.totalCpu?.toFixed(1) ?? '0.0'}%</div>
               </div>
-              <div className="space-y-1">
-                <div className="hardware-label !text-[8px] opacity-50">Memory Footprint</div>
-                <div className="hardware-value text-xl">{metricsHistory[metricsHistory.length - 1]?.totalMem || '0'} MB</div>
+              <div className="space-y-0.5">
+                <div className="hardware-label !text-[8px] opacity-50">RSS Footprint</div>
+                <div className="hardware-value text-2xl">
+                  {latestMetrics ? (latestMetrics.totalMem >= 1024
+                    ? (latestMetrics.totalMem / 1024).toFixed(1) + ' GB'
+                    : latestMetrics.totalMem + ' MB')
+                  : '0 MB'}
+                </div>
+              </div>
+              <div className="space-y-0.5">
+                <div className="hardware-label !text-[8px] opacity-50">Active Threads</div>
+                <div className="hardware-value text-2xl text-green-400">{latestMetrics?.active ?? '—'}</div>
+              </div>
+              <div className="space-y-0.5">
+                <div className="hardware-label !text-[8px] opacity-50">Throttled This Cycle</div>
+                <div className="hardware-value text-2xl text-orange-400">{latestMetrics?.optimized ?? '—'}</div>
               </div>
             </div>
-            <p className="text-[11px] font-medium leading-relaxed text-white/70 border-t border-white/5 pt-4">
-              System is maintaining <span className="text-white font-bold">98.4%</span> kernel stability. 
-              Optimization cycles are executing within <span className="text-white font-bold">2ms</span> latency.
-            </p>
+
+            <div className="border-t border-white/5 pt-3 space-y-1.5">
+              <div className="hardware-label !text-[8px] opacity-40">Session totals</div>
+              <div className="flex justify-between text-[10px] font-mono">
+                <span className="text-white/40">Throttle events</span>
+                <span className="text-orange-400 font-bold">{totalThrottled}</span>
+              </div>
+              <div className="flex justify-between text-[10px] font-mono">
+                <span className="text-white/40">Samples collected</span>
+                <span className="text-white/60">{metricsHistory.length}</span>
+              </div>
+              <div className="flex justify-between text-[10px] font-mono">
+                <span className="text-white/40">Peak CPU</span>
+                <span className="text-white/60">
+                  {metricsHistory.length > 0
+                    ? Math.max(...metricsHistory.map(m => m.totalCpu)).toFixed(1) + '%'
+                    : '—'}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Center/Right: Terminal & Logs */}
-        <div className="col-span-12 lg:col-span-9 space-y-6">
-          <div className="hardware-card flex flex-col h-[calc(100vh-180px)] min-h-[600px]">
+        {/* Center/Right: Visualization + Logs */}
+        <div className="col-span-12 lg:col-span-9 space-y-4">
+
+          {/* ── Stats Bar ── */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: "1-min Load", icon: <Activity size={11}/>, value: cycleData?.systemLoad.one?.toFixed(2) ?? '—', sub: `5m ${cycleData?.systemLoad.five?.toFixed(1)??'—'} · 15m ${cycleData?.systemLoad.fifteen?.toFixed(1)??'—'}`, danger: (cycleData?.systemLoad.one ?? 0) > 8 },
+              { label: "Memory", icon: <HardDrive size={11}/>, value: cycleData ? `${cycleData.memPercent.toFixed(1)}%` : '—', sub: cycleData ? `${cycleData.memUsedMB} MB / ${cycleData.memTotalMB} MB` : '—', danger: (cycleData?.memPercent ?? 0) > 85 },
+              { label: "Active Threads", icon: <Cpu size={11}/>, value: String(cycleData?.threads.length ?? '—'), sub: `PIDs: ${cycleData ? [...new Set(cycleData.threads.map(t=>t.pid))].length : '—'}`, danger: false },
+              { label: "Throttled/Opt", icon: <Zap size={11}/>, value: String(cycleData?.threads.filter(t=>t.status!=='Active').length ?? '—'), sub: `Peak CPU: ${cycleData && cycleData.threads.length ? Math.max(...cycleData.threads.map(t=>t.cpu)).toFixed(1)+'%' : '—'}`, danger: (cycleData?.threads.filter(t=>t.status==='THROTTLED').length ?? 0) > 0 },
+            ].map(({ label, icon, value, sub, danger }) => (
+              <div key={label} className={`hardware-card p-4 ${danger ? 'border-orange-500/30' : ''}`}>
+                <div className="flex items-center gap-1.5 hardware-label !text-[8px] opacity-50 mb-1.5">{icon}{label}</div>
+                <div className={`hardware-value text-2xl ${danger ? 'text-orange-400' : 'text-white'}`}>{value}</div>
+                <div className="hardware-label !text-[8px] opacity-30 mt-1 truncate">{sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* ── Thread Table + Charts ── */}
+          <div className="grid grid-cols-3 gap-4">
+            <div className="col-span-2">
+              <ThreadTable threads={cycleData?.threads ?? []} cycleTs={cycleData?.timestamp ?? null} />
+            </div>
+            <div className="space-y-4">
+              <div className="hardware-card p-4">
+                <div className="hardware-label !text-[8px] mb-2 flex items-center gap-1.5 opacity-60"><Activity size={10}/>System Load (1m · 5m · 15m)</div>
+                <div className="h-[120px]"><SystemLoadChart data={loadHistory} /></div>
+                <div className="mt-2 flex gap-3 hardware-label !text-[7px] opacity-30">
+                  <span className="flex items-center gap-1"><span className="w-3 h-[2px] bg-[#F27D26] inline-block"/>1m</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-[2px] bg-yellow-400 inline-block" style={{borderTop:'2px dashed'}}/>5m</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-[2px] bg-green-400 inline-block"/>15m</span>
+                </div>
+              </div>
+              <div className="hardware-card p-4">
+                <div className="hardware-label !text-[8px] mb-2 flex items-center gap-1.5 opacity-60"><HardDrive size={10}/>Memory Usage %</div>
+                <div className="h-[120px]"><MemTrendChart data={memHistory} /></div>
+              </div>
+            </div>
+          </div>
+
+          {/* ── Log Panel ── */}
+          <div className="hardware-card flex flex-col" style={{ height: 'calc(100vh - 560px)', minHeight: '360px' }}>
             <div className="scanline" />
-            
-            <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
-              <div className="flex items-center gap-3">
-                <Terminal size={14} className="text-[#8E9299]" />
-                <span className="hardware-label">System Audit Trail</span>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="flex gap-1">
-                  {[1, 2, 3].map(i => (
-                    <div key={i} className="w-1 h-3 bg-white/10 rounded-full" />
-                  ))}
+
+            {/* Log panel header */}
+            <div className="px-4 py-3 border-b border-white/5 bg-white/[0.02] space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Terminal size={14} className="text-[#8E9299]" />
+                  <span className="hardware-label">System Audit Trail</span>
+                  <span className="hardware-label !text-[8px] opacity-30">{filteredLogs.length} lines</span>
                 </div>
-                <div className="hardware-label !text-[9px] opacity-30">TTY: /dev/pts/0</div>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-8 font-mono text-[12px] space-y-1.5 custom-scrollbar bg-black/40">
-              <AnimatePresence mode="popLayout">
-                {logs.length > 0 ? (
-                  logs.filter(line => !line.includes("METRICS |")).map((line, i) => {
-                    const isTimestamp = line.includes("Timestamp:");
-                    const isSystem = line.includes("SYSTEM:");
-                    const isOptimized = line.includes("OPTIMIZED");
-                    const isActive = line.includes("Active");
-                    const isWaiting = line.includes("Waiting");
-                    const isForensic = line.includes("FORENSIC:");
-
-                    return (
-                      <motion.div 
-                        key={i}
-                        initial={{ opacity: 0, x: -4 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        className={`
-                          flex gap-4
-                          ${isTimestamp ? 'text-[#F27D26] mt-6 mb-2 font-black border-b border-[#F27D26]/20 pb-1' : ''}
-                          ${isSystem ? 'text-blue-400/80' : ''}
-                          ${isOptimized ? 'text-red-400 font-bold bg-red-400/5 px-1' : ''}
-                          ${isActive ? 'text-green-400/90' : ''}
-                          ${isForensic ? 'text-cyan-400/80 border-l-2 border-cyan-400/40 pl-2 italic' : ''}
-                          ${isWaiting ? 'text-yellow-400/60 italic' : 'text-white/50'}
-                        `}
-                      >
-                        <span className="opacity-20 select-none w-8 text-right">{(i + 1).toString().padStart(3, '0')}</span>
-                        <span className="flex-1">{line}</span>
-                      </motion.div>
-                    );
-                  })
-                ) : (
-                  <div className="h-full flex flex-col items-center justify-center space-y-4 opacity-20">
-                    <RefreshCw size={32} className="animate-spin" />
-                    <span className="hardware-label">Awaiting Data Stream...</span>
-                  </div>
-                )}
-              </AnimatePresence>
-              <div ref={logEndRef} />
-            </div>
-
-            <div className="px-6 py-3 border-t border-white/5 bg-white/[0.02] flex items-center justify-between">
-              <div className="flex items-center gap-6">
                 <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                  <span className="hardware-label !text-[8px]">Link: Stable</span>
-                </div>
-                <div className="flex items-center gap-2 text-white/30">
-                  <Activity size={10} />
-                  <span className="hardware-label !text-[8px]">Buffer: 1024KB</span>
+                  {logPaused && (
+                    <span className="hardware-label !text-[8px] text-yellow-400 animate-pulse">PAUSED</span>
+                  )}
+                  <button
+                    onClick={() => setLogPaused(p => !p)}
+                    title={logPaused ? "Resume live feed" : "Pause log updates"}
+                    className={`p-1.5 rounded transition-colors ${logPaused ? 'text-yellow-400 bg-yellow-400/10' : 'text-white/30 hover:text-white/70'}`}
+                  >
+                    {logPaused ? <Play size={12} /> : <Pause size={12} />}
+                  </button>
                 </div>
               </div>
-              <div className="hardware-label !text-[8px] opacity-20">
-                End of Stream
+
+              <div className="flex items-center gap-2 flex-wrap">
+                {(['all','throttled','optimized','system'] as const).map(f => (
+                  <button
+                    key={f}
+                    onClick={() => setLogFilter(f)}
+                    className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold uppercase tracking-wider transition-colors ${
+                      logFilter === f
+                        ? f === 'throttled' ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
+                        : f === 'optimized' ? 'bg-red-500/20 text-red-400 border border-red-500/40'
+                        : f === 'system'    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/40'
+                        : 'bg-white/10 text-white border border-white/20'
+                        : 'text-white/30 hover:text-white/60 border border-transparent'
+                    }`}
+                  >
+                    {f}
+                  </button>
+                ))}
+                <div className="flex-1 flex items-center gap-1.5 bg-white/5 border border-white/10 rounded px-2 py-0.5 min-w-[120px] max-w-[220px]">
+                  <Search size={10} className="text-white/30 shrink-0" />
+                  <input
+                    type="text"
+                    value={logSearch}
+                    onChange={e => setLogSearch(e.target.value)}
+                    placeholder="filter text…"
+                    className="bg-transparent text-[10px] font-mono text-white/70 placeholder:text-white/20 outline-none w-full"
+                  />
+                  {logSearch && (
+                    <button onClick={() => setLogSearch('')} title="Clear search" className="text-white/30 hover:text-white/70 shrink-0">
+                      <X size={10} />
+                    </button>
+                  )}
+                </div>
               </div>
+            </div>
+
+            {/* Log body — plain divs (no AnimatePresence) to prevent 100-line re-animation every 2s */}
+            <div
+              ref={logContainerRef}
+              className="relative flex-1 overflow-y-auto p-6 font-mono text-[12px] space-y-1 custom-scrollbar bg-black/40"
+            >
+              {filteredLogs.length > 0 ? (
+                filteredLogs.map((line, i) => {
+                  const isTimestamp = line.includes("Timestamp:");
+                  const isSystem    = line.includes("SYSTEM:");
+                  const isThrottled = line.includes("THROTTLED");
+                  const isOptimized = !isThrottled && line.includes("OPTIMIZED");
+                  const isActive    = !isThrottled && !isOptimized && line.includes("Active");
+                  const isWaiting   = line.includes("Waiting");
+                  const isForensic  = line.includes("FORENSIC:");
+                  const isCycle     = line.includes("Cycle complete");
+
+                  return (
+                    <div
+                      key={i}
+                      className={[
+                        'flex gap-3',
+                        isTimestamp ? 'text-[#F27D26] mt-5 mb-1 font-black border-b border-[#F27D26]/20 pb-1' : '',
+                        isSystem    ? 'text-blue-400/80' : '',
+                        isThrottled ? 'text-orange-400 font-bold bg-orange-400/8 px-1 rounded' : '',
+                        isOptimized ? 'text-red-400 font-bold bg-red-400/5 px-1 rounded' : '',
+                        isActive    ? 'text-green-400/90' : '',
+                        isForensic  ? 'text-cyan-400/80 border-l-2 border-cyan-400/40 pl-2 italic' : '',
+                        isCycle     ? 'text-white/80 font-bold' : '',
+                        isWaiting   ? 'text-yellow-400/60 italic' : '',
+                        !isTimestamp && !isSystem && !isThrottled && !isOptimized && !isActive && !isForensic && !isCycle && !isWaiting
+                          ? 'text-white/40' : '',
+                      ].join(' ')}
+                    >
+                      <span className="opacity-20 select-none w-7 text-right shrink-0">{(i + 1).toString().padStart(3, '0')}</span>
+                      <span className="flex-1 break-all">{line}</span>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center space-y-4 opacity-20">
+                  <RefreshCw size={32} className="animate-spin" />
+                  <span className="hardware-label">
+                    {logSearch ? 'No matches' : 'Awaiting Data Stream…'}
+                  </span>
+                </div>
+              )}
+              <div ref={logEndRef} />
+
+              {/* Jump-to-live button */}
+              {showJumpToBottom && (
+                <button
+                  onClick={() => {
+                    setLogPaused(false);
+                    isAtBottom.current = true;
+                    setShowJumpToBottom(false);
+                    const el = logContainerRef.current;
+                    if (el) el.scrollTop = el.scrollHeight;
+                  }}
+                  className="sticky bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#F27D26] text-black text-[10px] font-bold font-mono uppercase tracking-wider shadow-lg hover:brightness-110 transition-all"
+                >
+                  <ChevronsDown size={12} /> Jump to Live
+                </button>
+              )}
+            </div>
+
+            <div className="px-6 py-2.5 border-t border-white/5 bg-white/[0.02] flex items-center justify-between">
+              <div className="flex items-center gap-5">
+                <div className="flex items-center gap-1.5">
+                  <div className={`w-1.5 h-1.5 rounded-full ${isOffline ? 'bg-red-500' : 'bg-green-500 animate-pulse'}`} />
+                  <span className="hardware-label !text-[8px]">{isOffline ? 'Link Severed' : 'Link: Stable'}</span>
+                </div>
+                <span className="hardware-label !text-[8px] opacity-30">{displayedLogs.length} total lines</span>
+              </div>
+              <span className="hardware-label !text-[8px] opacity-20">
+                {logPaused ? 'feed paused' : 'live'}
+              </span>
             </div>
           </div>
         </div>

@@ -188,14 +188,19 @@ check_dependencies() {
 }
 
 # Logging function
-# Best Practice: Use printf for consistent output and handle ANSI stripping centrally
+# Best Practice: Use printf for consistent output and handle ANSI stripping centrally.
+# Log rotation is NOT done here (avoids spawning du -k on every message);
+# call rotate_log_if_needed once per cycle from the main loop instead.
 log_msg() {
     local msg="$1"
     local color="${2:-$NC}"
-    
     [[ -z "$msg" ]] && return
+    printf "${color}%s | %s${NC}\n" "$(date '+%F %T')" "$msg"
+    printf "%s | %s\n" "$(date '+%F %T')" "$msg" | sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE"
+}
 
-    # Log rotation check
+# Rotate log if it exceeds MAX_LOG_SIZE_KB. Called once per cycle — not per message.
+rotate_log_if_needed() {
     if [[ -f "$OUTPUT_FILE" ]]; then
         local size_kb
         size_kb=$(du -k "$OUTPUT_FILE" | cut -f1)
@@ -204,13 +209,6 @@ log_msg() {
             printf "%s | Log rotated due to size limit (%d KB).\n" "$(date '+%F %T')" "$size_kb" > "$OUTPUT_FILE"
         fi
     fi
-
-    # Print to terminal with color
-    printf "${color}%s | %s${NC}\n" "$(date '+%F %T')" "$msg"
-    # Append to log file without color
-    printf "%s | %s\n" "$(date '+%F %T')" "$msg" | sed -E "$ANSI_STRIP_RE" >> "$OUTPUT_FILE"
-    
-    assert "[[ -f '$OUTPUT_FILE' ]]" "Log file $OUTPUT_FILE was not created/updated"
 }
 
 cleanup() {
@@ -505,12 +503,14 @@ touch "$OUTPUT_FILE"
 cycle=0
 while true; do
     (( ++cycle ))
+    # Rotate once per cycle (avoids du -k subprocess overhead per log message)
+    rotate_log_if_needed
     process_cycle
-    
+
     # Backup logs every 100 cycles
     if (( cycle % 100 == 0 )); then
         backup_logs
     fi
-    
+
     sleep "$MONITOR_INTERVAL"
 done
