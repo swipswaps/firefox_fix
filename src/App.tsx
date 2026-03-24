@@ -267,9 +267,12 @@ function App() {
     const pad = (n: number) => n.toString().padStart(2, '0');
     const searchStr = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 
+    // Find the index in the logs array
     const index = logs.findIndex(line => line.includes(searchStr));
     
     if (index !== -1) {
+      // We need to find the index in the FILTERED logs array to scroll to the correct element
+      // Or better, just use the original index and ensure the element exists
       setHighlightedLogIndex(index);
       const element = document.getElementById(`log-line-${index}`);
       if (element) {
@@ -278,6 +281,9 @@ function App() {
         
         // Clear highlight after a few seconds
         setTimeout(() => setHighlightedLogIndex(null), 3000);
+      } else {
+        // If the element is not found (e.g. filtered out), we might need to find the nearest visible line
+        toast.error("Log entry hidden", { description: "The selected timestamp is in a filtered log line." });
       }
     } else {
       toast.error("Log entry not found", { description: "The selected timestamp is not present in the current audit trail." });
@@ -793,7 +799,9 @@ function App() {
               >
                 <AnimatePresence mode="popLayout">
                   {logs.length > 0 ? (
-                    logs.filter(line => !line.includes("METRICS |") && !line.includes("THREAD |")).map((line, i) => {
+                    logs.map((line, i) => {
+                      if (line.includes("METRICS |") || line.includes("THREAD |")) return null;
+
                       const isTimestamp = line.includes("Timestamp:");
                       const isSystem = line.includes("SYSTEM:");
                       const isSystemError = line.includes("SYSTEM ERROR:");

@@ -361,17 +361,25 @@ process_cycle() {
                         [[ "$use_sudo" == "true" ]] && prefix="sudo "
                     fi
                     
-                    local err_msg
-                    if err_msg=$( { $prefix renice -n "$RENICE_VAL" -p "$tid" && \
-                                   $prefix ionice -c "$IONICE_CLASS" -n "$IONICE_PRIO" -p "$tid"; } 2>&1 ); then
+                    # Execute optimizations and capture errors
+                    local renice_err=""
+                    local ionice_err=""
+                    
+                    if ! $prefix renice -n "$RENICE_VAL" -p "$tid" >/dev/null 2>&1; then
+                        renice_err="renice failed"
+                    fi
+                    
+                    if ! $prefix ionice -c "$IONICE_CLASS" -n "$IONICE_PRIO" -p "$tid" >/dev/null 2>&1; then
+                        ionice_err="ionice failed"
+                    fi
+
+                    if [[ -z "$renice_err" && -z "$ionice_err" ]]; then
                         status="OPTIMIZED"
                         color="$RED"
                         ((opt_count++))
                         forensic_audit "$tid" "$pid"
                     else
-                        local clean_err
-                        clean_err=$(echo "$err_msg" | head -n1 | sed 's/renice: //; s/ionice: //')
-                        status="HIGH (Err: ${clean_err})"
+                        status="HIGH (Err: ${renice_err:-}${ionice_err:+, }${ionice_err:-})"
                         color="$YELLOW"
                     fi
                 fi
