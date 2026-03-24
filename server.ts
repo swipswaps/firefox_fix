@@ -65,6 +65,8 @@ async function startServer() {
   app.use(cookieParser(process.env.AUTH_SECRET || "fx-opt-secret-default"));
   app.use(express.json());
   let optimizerProcess: ChildProcess | null = null;
+  // Tracks a pending auto-restart timer so explicit kills can cancel it cleanly.
+  let restartTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Auth Middleware
   const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -128,6 +130,14 @@ async function startServer() {
       optimizerProcess.on("exit", (code) => {
         console.log(`Optimizer process exited with code ${code}`);
         optimizerProcess = null;
+        // Auto-restart unless an explicit kill already scheduled a restart.
+        if (!restartTimer) {
+          console.log("Optimizer exited unexpectedly — auto-restarting in 3s...");
+          restartTimer = setTimeout(() => {
+            restartTimer = null;
+            startOptimizer();
+          }, 3000);
+        }
       });
     } catch (err) {
       console.error(`CRITICAL: Failed to set permissions or spawn optimizer:`, err);
@@ -182,9 +192,10 @@ async function startServer() {
 
     // Restart optimizer to apply new config via environment variables
     if (optimizerProcess) {
+      if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
       optimizerProcess.kill();
       optimizerProcess = null;
-      setTimeout(startOptimizer, 500);
+      restartTimer = setTimeout(() => { restartTimer = null; startOptimizer(); }, 500);
     }
 
     res.json({ status: "Configuration updated. System restarting...", config: runtimeConfig });
@@ -210,6 +221,7 @@ async function startServer() {
   app.get("/api/recover", requireAuth, async (req, res) => {
     console.log("SYSTEM: Initiating recovery sequence...");
     
+    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
     if (optimizerProcess) {
       optimizerProcess.kill();
       optimizerProcess = null;
@@ -226,7 +238,8 @@ async function startServer() {
       console.warn("Recovery: Cleanup warning:", err);
     }
 
-    setTimeout(() => {
+    restartTimer = setTimeout(() => {
+      restartTimer = null;
       startOptimizer();
       res.json({ status: "Recovery sequence completed. System restarting..." });
     }, 1000);
@@ -238,9 +251,10 @@ async function startServer() {
     process.env.FORENSIC_MODE = (!current).toString();
     
     if (optimizerProcess) {
+      if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
       optimizerProcess.kill();
       optimizerProcess = null;
-      setTimeout(startOptimizer, 500);
+      restartTimer = setTimeout(() => { restartTimer = null; startOptimizer(); }, 500);
     }
 
     res.json({ forensicMode: !current });
@@ -319,6 +333,7 @@ async function startServer() {
   // Graceful shutdown
   const shutdown = () => {
     console.log("Shutdown signal received. Cleaning up...");
+    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
     if (optimizerProcess) {
       console.log("Terminating optimizer process...");
       optimizerProcess.kill();
